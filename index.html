@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<title>유럽 6대리그 예측기 v0.1 (스켈레톤)</title>
+
+<link rel="manifest" href="./manifest.json"/>
+<meta name="theme-color" content="#05080f"/>
+<link rel="icon" href="./icon-192.png"/>
+<link rel="apple-touch-icon" href="./icon-192.png"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="6대리그 예측기"/>
+<script>
+window.addEventListener("error", function(ev){
+  var el = document.getElementById("root");
+  if (el && !el.dataset.mounted) el.innerHTML = '<div style="padding:20px;color:#ff6b6b;font-family:monospace;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word">'
+    + '⚠️ 자바스크립트 에러 (이 화면을 캡처해주세요)\n\n'
+    + (ev.message || "") + '\n\n'
+    + '파일: ' + (ev.filename||"").split("/").pop() + '\n'
+    + '위치: ' + (ev.lineno||"?") + '행 ' + (ev.colno||"?") + '열' + '</div>';
+});
+window.addEventListener("unhandledrejection", function(ev){
+  var el = document.getElementById("root");
+  if (el && !el.dataset.mounted) el.innerHTML = '<div style="padding:20px;color:#ff6b6b;font-family:monospace;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word">'
+    + '⚠️ Promise 에러\n\n' + (ev.reason && ev.reason.message ? ev.reason.message : String(ev.reason)) + '</div>';
+});
+</script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.6/babel.min.js"></script>
+<style>
+  html,body,#root{margin:0;padding:0;background:#05080f;min-height:100vh;}
+  *{-webkit-tap-highlight-color:transparent;}
+  ::-webkit-scrollbar{width:6px;height:6px;}
+  ::-webkit-scrollbar-thumb{background:#1e3a5f;border-radius:3px;}
+  select,input,button{font-family:inherit;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+/* window.storage 폴리필 — 일반 웹(GitHub Pages 등)에서는 localStorage로 영구 저장 */
+(function(){
+  if (window.storage) return;
+  function lsKey(k, shared){ return (shared?"shared:":"user:") + k; }
+  window.storage = {
+    async get(key, shared){
+      const v = localStorage.getItem(lsKey(key, shared));
+      if (v === null) return null;
+      return { key, value: v, shared: !!shared };
+    },
+    async set(key, value, shared){
+      localStorage.setItem(lsKey(key, shared), value);
+      return { key, value, shared: !!shared };
+    },
+    async delete(key, shared){
+      localStorage.removeItem(lsKey(key, shared));
+      return { key, deleted: true, shared: !!shared };
+    },
+    async list(prefix, shared){
+      const pfx = lsKey(prefix||"", shared);
+      const keys = [];
+      for (let i=0;i<localStorage.length;i++){
+        const full = localStorage.key(i);
+        if (full && full.startsWith(pfx)){
+          keys.push(full.replace(shared?"shared:":"user:",""));
+        }
+      }
+      return { keys, prefix, shared: !!shared };
+    }
+  };
+})();
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useCallback, useMemo, useEffect, useRef } = React;
+
+// ============================================================ 테마 (EPL 앱과 동일한 다크 팔레트)
+const T = {
+  bg:      "#05080f",
+  surface: "#0b1220",
+  card:    "#0f1a2e",
+  border:  "#182640",
+  borderHi:"#1e3a5f",
+  accent:  "#2979ff",
+  accentDim:"#1a4a99",
+  gold:    "#f5a623",
+  green:   "#00c853",
+  red:     "#ff3d57",
+  purple:  "#9c27b0",
+  cyan:    "#00bcd4",
+  text:    "#e8f0fe",
+  muted:   "#6b8aad",
+  dim:     "#2a3f5f",
+};
+
+// ============================================================ 리그별 시드 데이터
+// EPL 앱과 동일한 아키텍처: 리그 전환 시 Object.assign으로 전역 슬롯(ELO/CLUB_ABBR 등)을
+// 통째로 교체하고, leagueVersion state로 리렌더를 유도한다.
+// 지금 단계는 "얕은 틀"만 — 전체 팀 명단 + ELO 1500 기본값. 로고/일정/스쿼드는 다음 단계에서 채운다.
+
+function seedElo(teams) {
+  const o = {};
+  teams.forEach(t => { o[t] = 1500; });
+  return o;
+}
+
+// 리그별 실제 팀 약어(TLA) — 방송/스코어보드에서 쓰이는 표준 3~4자 약어 기준
+const ABBR_MAP = {
+  laliga: {
+    "알라베스":"ALA","아틀레틱 빌바오":"ATH","아틀레티코 마드리드":"ATM","바르셀로나":"FCB",
+    "셀타 비고":"CEL","데포르티보 라코루냐":"DEP","엘체":"ELX","에스파뇰":"ESP","헤타페":"GET",
+    "레반테":"LEV","말라가":"MAL","오사수나":"OSA","라싱 산탄데르":"RAC","라요 바예카노":"RAY",
+    "레알 베티스":"BET","레알 마드리드":"RMA","레알 소시에다드":"RSO","세비야":"SEV",
+    "발렌시아":"VAL","비야레알":"VIL",
+  },
+  bundesliga: {
+    "바이에른 뮌헨":"BAY","보루시아 도르트문트":"BVB","RB 라이프치히":"RBL","바이어 레버쿠젠":"B04",
+    "아인트라흐트 프랑크푸르트":"SGE","VfB 슈투트가르트":"VFB","SC 프라이부르크":"SCF",
+    "1.FC 쾰른":"KOE","TSG 호펜하임":"TSG","FC 아우크스부르크":"FCA","우니온 베를린":"FCU",
+    "베르더 브레멘":"SVW","1.FSV 마인츠05":"M05","보루시아 묀헨글라드바흐":"BMG",
+    "함부르크SV":"HSV","샬케04":"S04","SV 엘버스베르크":"ELV","SC 파더보른07":"SCP",
+  },
+  seriea: {
+    "아탈란타":"ATA","볼로냐":"BOL","칼리아리":"CAG","코모":"COM","피오렌티나":"FIO",
+    "프로시노네":"FRO","제노아":"GEN","인테르":"INT","유벤투스":"JUV","라치오":"LAZ",
+    "레체":"LEC","AC밀란":"MIL","몬차":"MON","나폴리":"NAP","파르마":"PAR","AS로마":"ROM",
+    "사수올로":"SAS","토리노":"TOR","우디네세":"UDI","베네치아":"VEN",
+  },
+  ligue1: {
+    "파리 생제르맹":"PSG","AS 모나코":"ASM","ESTAC 트루아":"TRO","파리 FC":"PFC","툴루즈":"TFC",
+    "올랭피크 리옹":"OL","르망FC":"LEM","스타드 브레스투아29":"BRE","OGC 니스":"NIC",
+    "FC 로리앙":"LOR","올랭피크 마르세유":"OM","라싱 스트라스부르":"RCS","스타드 렌":"REN",
+    "RC 랑스":"RCL","AJ 오세르":"AJA","앙제SCO":"ANG","릴OSC":"LOSC","르아브르AC":"HAC",
+  },
+  eredivisie: {
+    "ADO 덴하흐":"ADO","아약스":"AJX","AZ 알크마르":"AZ","엑셀시오르 로테르담":"EXC",
+    "FC 흐로닝언":"GRO","FC 트벤테":"TWE","FC 위트레흐트":"UTR","페예노르트":"FEY",
+    "포르투나 시타르드":"FOR","호 어헤드 이글스":"GAE","N.E.C. 네이메헌":"NEC","PEC 즈볼레":"PEC",
+    "PSV 에인트호번":"PSV","SC 캄뷔르":"CAM","sc 헤렌베인":"HEE","스파르타 로테르담":"SPA",
+    "텔스타르":"TEL","빌럼II":"WII",
+  },
+  championship: {
+    "울버햄튼 원더러스":"WOL","블랙번 로버스":"BLB","볼턴 원더러스":"BOL","프레스턴 노스엔드":"PNE",
+    "브리스톨 시티":"BRC","밀월":"MIL","찰턴 애슬레틱":"CHA","더비 카운티":"DER","미들즈브러":"MID",
+    "링컨 시티":"LIN","노리치 시티":"NOR","웨스트브롬위치 알비온":"WBA","포츠머스":"POR",
+    "QPR":"QPR","셰필드 유나이티드":"SHU","버밍엄 시티":"BIR","스토크 시티":"STK",
+    "스완지 시티":"SWA","번리":"BUR","웨스트햄 유나이티드":"WHU","왓포드":"WAT","렉섬":"WRE",
+    "카디프 시티":"CAR","사우샘프턴":"SOU",
+  },
+};
+
+function seedAbbr(leagueKey, teams) {
+  const map = ABBR_MAP[leagueKey] || {};
+  const o = {};
+  teams.forEach(t => {
+    o[t] = map[t] || t.replace(/\s+/g, "").slice(0, 3).toUpperCase();
+  });
+  return o;
+}
+
+const LEAGUES = {
+  laliga: {
+    label: "라리가",
+    country: "스페인",
+    teams: ["알라베스","아틀레틱 빌바오","아틀레티코 마드리드","바르셀로나","셀타 비고",
+      "데포르티보 라코루냐","엘체","에스파뇰","헤타페","레반테","말라가","오사수나",
+      "라싱 산탄데르","라요 바예카노","레알 베티스","레알 마드리드","레알 소시에다드",
+      "세비야","발렌시아","비야레알"],
+  },
+  bundesliga: {
+    label: "분데스리가",
+    country: "독일",
+    teams: ["바이에른 뮌헨","보루시아 도르트문트","RB 라이프치히","바이어 레버쿠젠",
+      "아인트라흐트 프랑크푸르트","VfB 슈투트가르트","SC 프라이부르크","1.FC 쾰른",
+      "TSG 호펜하임","FC 아우크스부르크","우니온 베를린","베르더 브레멘","1.FSV 마인츠05",
+      "보루시아 묀헨글라드바흐","함부르크SV","샬케04","SV 엘버스베르크","SC 파더보른07"],
+  },
+  seriea: {
+    label: "세리에A",
+    country: "이탈리아",
+    teams: ["아탈란타","볼로냐","칼리아리","코모","피오렌티나","프로시노네","제노아",
+      "인테르","유벤투스","라치오","레체","AC밀란","몬차","나폴리","파르마","AS로마",
+      "사수올로","토리노","우디네세","베네치아"],
+  },
+  ligue1: {
+    label: "리그앙",
+    country: "프랑스",
+    teams: ["파리 생제르맹","AS 모나코","ESTAC 트루아","파리 FC","툴루즈","올랭피크 리옹",
+      "르망FC","스타드 브레스투아29","OGC 니스","FC 로리앙","올랭피크 마르세유",
+      "라싱 스트라스부르","스타드 렌","RC 랑스","AJ 오세르","앙제SCO","릴OSC","르아브르AC"],
+  },
+  eredivisie: {
+    label: "에레디비시",
+    country: "네덜란드",
+    teams: ["ADO 덴하흐","아약스","AZ 알크마르","엑셀시오르 로테르담","FC 흐로닝언",
+      "FC 트벤테","FC 위트레흐트","페예노르트","포르투나 시타르드","호 어헤드 이글스",
+      "N.E.C. 네이메헌","PEC 즈볼레","PSV 에인트호번","SC 캄뷔르","sc 헤렌베인",
+      "스파르타 로테르담","텔스타르","빌럼II"],
+  },
+  championship: {
+    label: "챔피언십",
+    country: "잉글랜드 2부",
+    teams: ["울버햄튼 원더러스","블랙번 로버스","볼턴 원더러스","프레스턴 노스엔드",
+      "브리스톨 시티","밀월","찰턴 애슬레틱","더비 카운티","미들즈브러","링컨 시티",
+      "노리치 시티","웨스트브롬위치 알비온","포츠머스","QPR","셰필드 유나이티드",
+      "버밍엄 시티","스토크 시티","스완지 시티","번리","웨스트햄 유나이티드","왓포드",
+      "렉섬","카디프 시티","사우샘프턴"],
+  },
+};
+const LEAGUE_ORDER = ["laliga","bundesliga","seriea","ligue1","eredivisie","championship"];
+
+// ============================================================ 전역 슬롯 (리그 전환 시 통째로 교체)
+let ELO = seedElo(LEAGUES.laliga.teams);
+let CLUB_ABBR = seedAbbr("laliga", LEAGUES.laliga.teams);
+const clubAbbr = n => (n && CLUB_ABBR[n]) ? CLUB_ABBR[n] : (n ? n.slice(0,3) : "");
+
+// ============================================================ 파이프라인 연동 훅
+// EPL 앱(epl-management 저장소)과 완전히 같은 저장소를 쓴다. app_export_multileague.py가
+// 6개 리그를 한 파일(reports/app_data_multileague.js)에 window.PIPELINE_DATA_{리그}
+// = {...}; 형태로 직접 대입하는 문 형태로 만들어두므로, 그 파일을 그대로 실행만
+// 하면 각 리그 전역변수가 채워진다.
+const PIPELINE_REPO_OWNER = "style2580n-droid";
+const PIPELINE_REPO_NAME = "epl-management";
+const PIPELINE_BRANCH = "main";
+
+let _pipelineFetchPromise = null;
+function fetchPipelineDataMultileague() {
+  // 여러 리그를 빠르게 전환해도 fetch가 중복으로 나가지 않도록 Promise를 캐시한다.
+  if (_pipelineFetchPromise) return _pipelineFetchPromise;
+  _pipelineFetchPromise = (async () => {
+    try {
+      const url = `https://raw.githubusercontent.com/${PIPELINE_REPO_OWNER}/${PIPELINE_REPO_NAME}/${PIPELINE_BRANCH}/reports/app_data_multileague.js?t=${Date.now()}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) {
+        console.warn("[pipeline] app_data_multileague.js 없음:", res.status);
+        return false;
+      }
+      const text = await res.text();
+      // 파일 내용이 이미 "window.PIPELINE_DATA_LALIGA = {...};" 형태의 실행 가능한
+      // JS 문이라, EPL 앱처럼 구조분해할 필요 없이 그대로 실행만 하면 window에 붙는다.
+      new Function(text)();
+      return true;
+    } catch (e) {
+      console.warn("[pipeline] fetch 실패:", e);
+      return false;
+    }
+  })();
+  return _pipelineFetchPromise;
+}
+
+let SCHEDULE = [];   // { home, away, date, matchday } — fetchPipelineDataMultileague() 이후 채워짐
+let CLUB_LOGOS = {}; // { 팀명: crest URL } — 없으면 UI가 자동으로 약어 배지로 대체 표시
+
+async function loadPipelineData(leagueKey) {
+  try {
+    await fetchPipelineDataMultileague();
+    const globalKey = `PIPELINE_DATA_${leagueKey.toUpperCase()}`;
+    const data = (typeof window !== "undefined") ? window[globalKey] : null;
+    if (!data) return { scheduleLoaded:false, logosLoaded:false };
+    let scheduleLoaded = false, logosLoaded = false;
+    if (Array.isArray(data.schedule) && data.schedule.length) {
+      SCHEDULE = data.schedule;
+      scheduleLoaded = true;
+    }
+    if (data.logos && typeof data.logos === "object") {
+      Object.assign(CLUB_LOGOS, data.logos);
+      logosLoaded = true;
+    }
+    if (data.elo && typeof data.elo === "object") {
+      Object.assign(ELO, data.elo);
+    }
+    return { scheduleLoaded, logosLoaded };
+  } catch (e) {
+    return { scheduleLoaded:false, logosLoaded:false };
+  }
+}
+
+function clubLogo(name) {
+  return (name && CLUB_LOGOS[name]) ? CLUB_LOGOS[name] : "";
+}
+
+function switchLeagueData(leagueKey) {
+  const lg = LEAGUES[leagueKey];
+  Object.keys(ELO).forEach(k => delete ELO[k]);
+  Object.keys(CLUB_ABBR).forEach(k => delete CLUB_ABBR[k]);
+  Object.assign(ELO, seedElo(lg.teams));
+  Object.assign(CLUB_ABBR, seedAbbr(leagueKey, lg.teams));
+  SCHEDULE = [];
+  CLUB_LOGOS = {};
+}
+
+// ============================================================ 간이 ELO 기반 승률 계산 (표준 Elo 공식)
+// 실제 경기 일정/xG 데이터가 붙기 전까지는 홈 어드밴티지(+65) 반영한 표준 Elo 승률 공식만 사용.
+// EPL 앱의 predictMatch(하이브리드 ELO+xG+ML 앙상블+몬테카를로)로 나중에 교체 예정.
+const HOME_ADV = 65;
+function eloWinProb(home, away) {
+  const eh = (ELO[home] ?? 1500) + HOME_ADV;
+  const ea = ELO[away] ?? 1500;
+  const diff = eh - ea;
+  const pHome = 1 / (1 + Math.pow(10, -diff / 400));
+  // 무승부 확률은 팀 간 실력차가 작을수록 커지는 간단한 근사식
+  const closeness = 1 - Math.min(Math.abs(diff) / 800, 1);
+  const drawProb = 0.24 + closeness * 0.06;
+  const homeWinProb = pHome * (1 - drawProb);
+  const awayWinProb = (1 - pHome) * (1 - drawProb);
+  return { homeWinProb, drawProb, awayWinProb };
+}
+
+// ============================================================ UI 조각
+function Card({ children, style }) {
+  return <div style={{background:T.card, border:`1px solid ${T.border}`, borderRadius:14, padding:14, marginBottom:12, ...style}}>{children}</div>;
+}
+function Bar({ label, value, color }) {
+  return (
+    <div style={{marginBottom:8}}>
+      <div style={{display:"flex", justifyContent:"space-between", fontSize:12, color:T.muted, marginBottom:4}}>
+        <span>{label}</span><span style={{color:T.text, fontWeight:700}}>{(value*100).toFixed(1)}%</span>
+      </div>
+      <div style={{height:8, borderRadius:4, background:T.surface, overflow:"hidden"}}>
+        <div style={{height:"100%", width:`${value*100}%`, background:color, borderRadius:4, transition:"width .3s"}}/>
+      </div>
+    </div>
+  );
+}
+
+function LeaguePicker({ leagueKey, onChange }) {
+  return (
+    <div style={{display:"flex", overflowX:"auto", gap:6, padding:"0 12px 10px"}}>
+      {LEAGUE_ORDER.map(k => (
+        <button key={k} onClick={()=>onChange(k)}
+          style={{flex:"0 0 auto", padding:"7px 12px", borderRadius:16, border:`1px solid ${leagueKey===k?T.accent:T.border}`,
+                  cursor:"pointer", fontSize:12.5, fontWeight:700, whiteSpace:"nowrap",
+                  background: leagueKey===k ? T.accentDim : T.surface,
+                  color: leagueKey===k ? "#fff" : T.muted}}>
+          {LEAGUES[k].label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PredictTab({ leagueKey }) {
+  const teams = LEAGUES[leagueKey].teams;
+  const [home, setHome] = useState(teams[0]);
+  const [away, setAway] = useState(teams[1]);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    setHome(teams[0]); setAway(teams[1]); setResult(null);
+  }, [leagueKey]);
+
+  const run = useCallback(() => {
+    if (home === away) return;
+    setResult(eloWinProb(home, away));
+  }, [home, away]);
+
+  return (
+    <div>
+      <Card>
+        <div style={{display:"flex", gap:8, alignItems:"center"}}>
+          <select value={home} onChange={e=>setHome(e.target.value)}
+            style={{flex:1, background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 8px", fontSize:13}}>
+            {teams.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <span style={{color:T.muted, fontSize:12}}>vs</span>
+          <select value={away} onChange={e=>setAway(e.target.value)}
+            style={{flex:1, background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 8px", fontSize:13}}>
+            {teams.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <button onClick={run} disabled={home===away}
+          style={{width:"100%", marginTop:10, padding:"11px 0", borderRadius:10, border:"none",
+                  background: home===away ? T.dim : T.accent, color:"#fff", fontWeight:800, fontSize:14,
+                  cursor: home===away ? "default" : "pointer"}}>
+          예측하기
+        </button>
+        {home===away && <div style={{color:T.red, fontSize:11.5, marginTop:6}}>같은 팀은 선택할 수 없습니다.</div>}
+      </Card>
+
+      {result && (
+        <Card>
+          <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
+            {home} <span style={{color:T.dim}}>({clubAbbr(home)})</span> vs {away} <span style={{color:T.dim}}>({clubAbbr(away)})</span>
+          </div>
+          <Bar label={`${home} 승`} value={result.homeWinProb} color={T.accent}/>
+          <Bar label="무승부" value={result.drawProb} color={T.gold}/>
+          <Bar label={`${away} 승`} value={result.awayWinProb} color={T.red}/>
+          <div style={{fontSize:10.5, color:T.dim, marginTop:8, lineHeight:1.5}}>
+            ⚠️ 스켈레톤 단계: 전 팀 ELO 1500 기본값 + 홈 어드밴티지만 반영한 간이 계산입니다.
+            실제 ELO/xG/일정 데이터가 채워지면 EPL 앱과 동일한 몬테카를로 앙상블로 교체됩니다.
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function TeamListTab({ leagueKey }) {
+  const lg = LEAGUES[leagueKey];
+  const teams = [...lg.teams].sort((a,b)=>a.localeCompare(b,"ko"));
+  return (
+    <Card>
+      <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:2}}>{lg.label} <span style={{color:T.muted, fontWeight:600, fontSize:11.5}}>· {lg.country} · {lg.teams.length}팀</span></div>
+      <div style={{fontSize:10.5, color:T.dim, marginBottom:10}}>2026-27 시즌 명단 (팀 로고·약어는 다음 단계에서 채울 예정)</div>
+      {teams.map((t,i) => (
+        <div key={t} style={{display:"flex", justifyContent:"space-between", alignItems:"center",
+          padding:"9px 4px", borderBottom: i<teams.length-1 ? `1px solid ${T.border}` : "none"}}>
+          <div style={{display:"flex", alignItems:"center", gap:8}}>
+            {clubLogo(t) ? (
+              <img src={clubLogo(t)} alt={t} width={26} height={26}
+                style={{borderRadius:7, background:T.surface, border:`1px solid ${T.border}`, objectFit:"contain"}}
+                onError={e => { e.target.style.display = "none"; }}/>
+            ) : (
+              <div style={{width:26, height:26, borderRadius:7, background:T.surface, border:`1px solid ${T.border}`,
+                display:"flex", alignItems:"center", justifyContent:"center", fontSize:9.5, fontWeight:800, color:T.muted}}>
+                {clubAbbr(t)}
+              </div>
+            )}
+            <span style={{fontSize:13, color:T.text}}>{t}</span>
+          </div>
+          <span style={{fontSize:11.5, color:T.muted}}>ELO {ELO[t] ?? 1500}</span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function RankingTab({ leagueKey }) {
+  const teams = [...LEAGUES[leagueKey].teams].sort((a,b) => (ELO[b]??1500) - (ELO[a]??1500));
+  return (
+    <Card>
+      <div style={{fontSize:12, color:T.dim, marginBottom:10}}>
+        전 팀이 아직 ELO 1500 기본값이라 순위는 의미가 없습니다. 파이프라인 연동 후 실제 레이팅으로 갱신됩니다.
+      </div>
+      {teams.map((t,i) => (
+        <div key={t} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 4px",
+          borderBottom: i<teams.length-1 ? `1px solid ${T.border}` : "none"}}>
+          <span style={{width:22, fontSize:12, color:T.muted, fontWeight:700}}>{i+1}</span>
+          <span style={{flex:1, fontSize:13, color:T.text}}>{t}</span>
+          <span style={{fontSize:12.5, color:T.accent, fontWeight:700}}>{ELO[t] ?? 1500}</span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function ScheduleTab({ leagueKey }) {
+  const lg = LEAGUES[leagueKey];
+  if (!SCHEDULE.length) {
+    return (
+      <Card>
+        <div style={{textAlign:"center", padding:"20px 8px"}}>
+          <div style={{fontSize:28, marginBottom:8}}>📅</div>
+          <div style={{fontSize:13.5, color:T.text, fontWeight:700, marginBottom:6}}>
+            {lg.label} 일정이 아직 연동되지 않았습니다
+          </div>
+          <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
+            epl-management 파이프라인이 <code style={{color:T.cyan}}>reports/app_data_multileague.js</code>를
+            통해 <code style={{color:T.cyan}}>window.PIPELINE_DATA_{leagueKey.toUpperCase()}.schedule</code>을
+            채워주면 이 탭에 실제 경기 일정이 자동으로 표시됩니다.
+          </div>
+        </div>
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      {SCHEDULE.map((g, i) => (
+        <div key={i} style={{display:"flex", justifyContent:"space-between", padding:"8px 4px",
+          borderBottom: i<SCHEDULE.length-1 ? `1px solid ${T.border}` : "none", fontSize:13}}>
+          <span style={{color:T.text}}>{g.home} vs {g.away}</span>
+          <span style={{color:T.muted, fontSize:11.5}}>{g.date || ""}</span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+const TABS = [
+  { id:"predict", label:"예측" },
+  { id:"teams", label:"팀 명단" },
+  { id:"ranking", label:"레이팅" },
+  { id:"schedule", label:"일정" },
+];
+
+function App() {
+  const [leagueKey, setLeagueKey] = useState("laliga");
+  const [leagueVersion, setLeagueVersion] = useState(0);
+  const [tab, setTab] = useState("predict");
+  const [ready, setReady] = useState(false);
+  const [pipelineStatus, setPipelineStatus] = useState(null); // null=확인중, true=연결됨, false=미연결
+
+  useEffect(() => {
+    (async () => {
+      // 리그별 저장된 동적 ELO가 있으면 불러오고, 없으면 1500 기본값 시드 유지
+      switchLeagueData(leagueKey);
+      try {
+        const saved = await window.storage.get(`wc:elo:${leagueKey}`);
+        if (saved && saved.value) {
+          const parsed = JSON.parse(saved.value);
+          Object.assign(ELO, parsed);
+        }
+      } catch (e) {}
+      // 파이프라인이 아직 없으면 scheduleLoaded/logosLoaded 둘 다 false로 조용히 반환됨 (오류 아님)
+      const { scheduleLoaded, logosLoaded } = await loadPipelineData(leagueKey);
+      setPipelineStatus(scheduleLoaded || logosLoaded);
+      setLeagueVersion(v => v + 1);
+      setReady(true);
+    })();
+  }, [leagueKey]);
+
+  const onSelectLeague = useCallback((k) => {
+    if (k === leagueKey) return;
+    setReady(false);
+    setLeagueKey(k);
+    setTab("predict");
+  }, [leagueKey]);
+
+  return (
+    <div style={{maxWidth:520, margin:"0 auto", minHeight:"100vh", paddingBottom:30}}>
+      <div style={{padding:"18px 14px 10px", textAlign:"center"}}>
+        <div style={{fontSize:19, fontWeight:900, color:T.text}}>⚽ 유럽 6대리그 예측기 <span style={{fontSize:12.5, color:T.cyan, fontWeight:600}}>v0.1</span></div>
+        <div style={{fontSize:11, color:T.muted, marginTop:3}}>
+          라리가 · 분데스리가 · 세리에A · 리그앙 · 에레디비시 · 챔피언십
+        </div>
+      </div>
+
+      <LeaguePicker leagueKey={leagueKey} onChange={onSelectLeague}/>
+
+      <div style={{display:"flex", overflowX:"auto", gap:6, padding:"0 12px 10px", borderBottom:`1px solid ${T.border}`}}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{flex:"0 0 auto", padding:"8px 14px", borderRadius:20, border:"none", cursor:"pointer",
+                    fontSize:13, fontWeight:700, whiteSpace:"nowrap",
+                    background: tab===t.id ? T.accent : T.surface,
+                    color: tab===t.id ? "#fff" : T.muted}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{padding:"12px 12px 0"}}>
+        {!ready ? (
+          <Card><div style={{textAlign:"center", color:T.muted, fontSize:13}}>불러오는 중...</div></Card>
+        ) : (
+          <React.Fragment key={leagueVersion}>
+            {tab === "predict" && <PredictTab leagueKey={leagueKey}/>}
+            {tab === "teams" && <TeamListTab leagueKey={leagueKey}/>}
+            {tab === "ranking" && <RankingTab leagueKey={leagueKey}/>}
+            {tab === "schedule" && <ScheduleTab leagueKey={leagueKey}/>}
+          </React.Fragment>
+        )}
+      </div>
+
+      <div style={{textAlign:"center", marginTop:24, fontSize:10, color:T.dim, padding:"0 20px"}}>
+        {pipelineStatus === null ? (
+          <span>⏳ 파이프라인 연결 확인 중...</span>
+        ) : pipelineStatus ? (
+          <span style={{color:T.green}}>✅ 파이프라인 연결됨 — 이 리그는 실데이터 적용됨</span>
+        ) : (
+          <span>⚠️ 파이프라인 미연결 — 아직 스켈레톤(ELO 1500 기본값)입니다</span>
+        )}
+        <br/>다음 단계: 로고 매핑 → 예측 엔진 고도화
+      </div>
+    </div>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props){ super(props); this.state = { hasError:false, err:null }; }
+  static getDerivedStateFromError(err){ return { hasError:true, err }; }
+  render(){
+    if (this.state.hasError) {
+      return <div style={{padding:20,color:"#ff6b6b",fontFamily:"monospace",fontSize:13,lineHeight:1.7,whiteSpace:"pre-wrap"}}>
+        ⚠️ 렌더링 오류\n\n{String(this.state.err && this.state.err.message || this.state.err)}
+      </div>;
+    }
+    return this.props.children;
+  }
+}
+
+try {
+  document.getElementById("root").dataset.mounted = "1";
+  ReactDOM.createRoot(document.getElementById("root")).render(
+    <ErrorBoundary><App/></ErrorBoundary>
+  );
+} catch (e) {
+  const el = document.getElementById("root");
+  if (el) el.innerHTML = '<div style="padding:20px;color:#ff6b6b;font-family:sans-serif;font-size:14px;line-height:1.6">'
+    + '⚠️ 앱 로딩 중 오류가 발생했습니다.<br/><br/>'
+    + '<small style="color:#888">' + (e && e.message ? e.message : e) + '</small></div>';
+}
+</script>
+
+<script>
+if ("serviceWorker" in navigator && (location.protocol === "http:" || location.protocol === "https:")) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("./sw.js").catch(function () {});
+  });
+}
+</script>
+
+</body>
+</html>
