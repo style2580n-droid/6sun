@@ -606,7 +606,7 @@ function computeEV(modelProb, fairOdds) {
   return (modelProb * fairOdds) - 1; // 양수면 모델이 시장보다 이 결과를 더 유력하게 봄
 }
 
-const ODDS_API_IO_KEY = "demo"; // TODO: 실제 무료 키로 교체 필요 — odds-api.io에서 발급(카드 등록 불필요)
+const ODDS_API_IO_KEY = "afb988f21e224372190ac852df6d2430c86be07b7a3bd8088f2a42950b648db0"; // EPL 앱과 동일한 실제 키로 교체 (2026-07-16)
 
 async function fetchMatchOdds(leagueKey, home, away) {
   try {
@@ -1067,6 +1067,422 @@ function TeamStyleRadarCard({ leagueKey, home, away }) {
   );
 }
 
+// ============================================================ 라이브 인플레이 재계산 (EPL 앱 이식)
+function LiveInPlayPanel({home, away, lambdaHome, lambdaAway}) {
+  const [active, setActive] = useState(false);
+  const [hg, setHg] = useState("0");
+  const [ag, setAg] = useState("0");
+  const [minute, setMinute] = useState(45);
+  const [live, setLive] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const recalc = useCallback(() => {
+    const curH = Math.max(0, Number(hg)||0);
+    const curA = Math.max(0, Number(ag)||0);
+    const min = Math.min(90, Math.max(0, Number(minute)||0));
+    setBusy(true);
+    setTimeout(() => {
+      const remainFrac = Math.max(0, (90 - min) / 90);
+      const rlh = Math.max(0.02, lambdaHome * remainFrac);
+      const rla = Math.max(0.02, lambdaAway * remainFrac);
+      const sims = 30000;
+      let hw=0, dr=0, aw=0;
+      const scoreCounts = {};
+      for (let i=0;i<sims;i++) {
+        const addH = poissonRandom(rlh);
+        const addA = poissonRandom(rla);
+        const fh = curH + addH, fa = curA + addA;
+        if (fh > fa) hw++; else if (fh < fa) aw++; else dr++;
+        const key = `${fh}-${fa}`;
+        scoreCounts[key] = (scoreCounts[key]||0)+1;
+      }
+      const topScores = Object.entries(scoreCounts).sort((a,b)=>b[1]-a[1]).slice(0,3)
+        .map(([score,count])=>({score, prob:count/sims}));
+      setLive({ homeWinProb: hw/sims, drawProb: dr/sims, awayWinProb: aw/sims, topScores, minute: min, curH, curA, remainFrac });
+      setBusy(false);
+    }, 20);
+  }, [hg, ag, minute, lambdaHome, lambdaAway]);
+
+  return (
+    <Card>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+        <div>
+          <div style={{fontSize:12, fontWeight:700, color:T.text}}>🔴 라이브 인플레이 재계산</div>
+          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>현재 스코어·경과 시간으로 남은 시간 기준 확률을 다시 계산합니다</div>
+        </div>
+        <button onClick={()=>setActive(a=>!a)} style={{fontSize:11, color:T.accent, background:"transparent",
+                border:`1px solid ${T.border}`, borderRadius:8, padding:"5px 10px", cursor:"pointer", whiteSpace:"nowrap"}}>
+          {active ? "접기" : "펼치기"}
+        </button>
+      </div>
+      {active && (
+        <div>
+          <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
+            <span style={{fontSize:11.5, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{home}</span>
+            <input type="number" min="0" value={hg} onChange={e=>setHg(e.target.value)}
+              style={{width:50, padding:"7px", borderRadius:7, background:T.surface, border:`1px solid ${T.border}`, color:T.text, textAlign:"center"}}/>
+            <span style={{color:T.muted}}>:</span>
+            <input type="number" min="0" value={ag} onChange={e=>setAg(e.target.value)}
+              style={{width:50, padding:"7px", borderRadius:7, background:T.surface, border:`1px solid ${T.border}`, color:T.text, textAlign:"center"}}/>
+            <span style={{fontSize:11.5, color:T.muted, flex:1, textAlign:"right", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{away}</span>
+          </div>
+          <div style={{marginTop:12}}>
+            <div style={{display:"flex", justifyContent:"space-between", fontSize:11.5, color:T.muted}}>
+              <span>경과 시간</span><span style={{color:T.text, fontWeight:700}}>{minute}분</span>
+            </div>
+            <input type="range" min="1" max="90" step="1" value={minute} onChange={e=>setMinute(Number(e.target.value))} style={{width:"100%", marginTop:6}}/>
+          </div>
+          <button onClick={recalc} disabled={busy}
+            style={{width:"100%", marginTop:12, padding:"11px", borderRadius:9, border:"none",
+                    background: busy ? T.dim : T.red, color:"#fff", fontSize:13, fontWeight:800, cursor:busy?"default":"pointer"}}>
+            {busy ? "재계산 중..." : "🔴 실시간 확률 재계산"}
+          </button>
+          {live && (
+            <div style={{marginTop:12}}>
+              <div style={{textAlign:"center", fontSize:11, color:T.muted, marginBottom:6}}>
+                {live.minute}분 경과 · 현재 {live.curH}-{live.curA} · 남은 {Math.round(live.remainFrac*90)}분 기준 재계산
+              </div>
+              <Bar label={`${home} 승`} value={live.homeWinProb} color={T.accent}/>
+              <Bar label="무승부" value={live.drawProb} color={T.gold}/>
+              <Bar label={`${away} 승`} value={live.awayWinProb} color={T.red}/>
+              <div style={{fontSize:11, color:T.muted, marginTop:4, textAlign:"center"}}>
+                예상 최종 스코어: {live.topScores.map(s=>`${s.score} (${(s.prob*100).toFixed(1)}%)`).join(" · ")}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ============================================================ 예측 근거 설명 카드 (EPL 앱 이식, 이 앱 result 필드에 맞춤)
+function PredictionExplainCard({home, away, result}) {
+  if (!result) return null;
+  const items = [];
+
+  if (Math.abs(result.eloDiff||0) > 10) {
+    const favored = result.eloDiff > 0 ? home : away;
+    items.push({icon:"📊", text:`ELO 전력 차이가 약 ${Math.abs(Math.round(result.eloDiff))}점으로, ${favored} 쪽에 유리하게 작용했습니다.`});
+  }
+  if (result.rivalry) {
+    items.push({icon:"🔥", text:"두 팀은 더비/라이벌전으로 분류되어, 전력 차와 무관하게 접전(무승부 확률 상승) 보정이 적용됐습니다."});
+  }
+  if (result.xgBlended) {
+    items.push({icon:"📈", text:"실제 xG(기대득점) 데이터가 30% 비중으로 반영된 예측입니다."});
+  } else {
+    items.push({icon:"⚠️", text:"이 매치업은 xG 실데이터가 아직 없어(신규 승격팀 등) ELO 기준으로만 계산됐습니다."});
+  }
+  if (result.injuryApplied) {
+    items.push({icon:"🩹", text:"결장 선수 정보가 득점 기대치에 반영됐습니다."});
+  }
+  if (result.fatigueApplied) {
+    items.push({icon:"✈️", text:"월드컵 등 국가대표 소집 여독이 반영됐습니다."});
+  }
+  const lambdaDiff = (result.lambdaHome||0) - (result.lambdaAway||0);
+  if (Math.abs(lambdaDiff) > 0.3) {
+    const favored = lambdaDiff > 0 ? home : away;
+    items.push({icon:"⚽", text:`기대득점(λ) 기준으로도 ${favored} 쪽이 더 많은 득점이 예상됩니다.`});
+  }
+  if (!items.length) items.push({icon:"⚖️", text:"뚜렷하게 기운 요인 없이 대체로 균형 잡힌 매치업으로 나타났습니다."});
+
+  return (
+    <Card>
+      <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>🧠 예측 근거</div>
+      <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>이번 예측 확률에 영향을 준 주요 요인들입니다</div>
+      <div style={{display:"flex", flexDirection:"column", gap:8}}>
+        {items.slice(0,6).map((it,i) => (
+          <div key={i} style={{display:"flex", gap:8, fontSize:12, color:T.text, lineHeight:1.5}}>
+            <span>{it.icon}</span><span>{it.text}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================ 배당 비교 대시보드 (EPL 앱 이식)
+// 기존 fetchMatchOdds는 첫 북메이커만 썼는데, 여기서는 응답에 담긴 전체 북메이커를 추출한다.
+function extractAllBookmakerOddsFromOddsApiIo(leagueKey, home, away, data, swapped) {
+  if (!data) return [];
+  const candidates = [];
+  if (Array.isArray(data?.bookmakers)) candidates.push(...data.bookmakers);
+  if (Array.isArray(data?.data?.bookmakers)) candidates.push(...data.data.bookmakers);
+  const out = [];
+  for (const bk of candidates) {
+    const markets = bk?.markets || bk?.odds || [];
+    if (!Array.isArray(markets)) continue;
+    const h2h = markets.find(m => {
+      const key = (m.key || m.market || m.name || "").toLowerCase();
+      return key.includes("h2h") || key.includes("1x2") || key.includes("match winner");
+    });
+    if (!h2h || !Array.isArray(h2h.outcomes)) continue;
+    let oh=null, od=null, oa=null;
+    for (const o of h2h.outcomes) {
+      const price = o.price ?? o.odds ?? o.value;
+      if (typeof price !== "number") continue;
+      const name = (o.name || o.label || "");
+      if (/^draw$/i.test(name)) od = price;
+      else if (isSameClubName(leagueKey, swapped ? away : home, name)) oh = price;
+      else if (isSameClubName(leagueKey, swapped ? home : away, name)) oa = price;
+    }
+    if (oh == null || oa == null) continue;
+    const bkName = bk.name || bk.key || bk.title || bk.bookmaker || "북메이커";
+    out.push(swapped ? { bookmaker: bkName, home: oa, draw: od, away: oh } : { bookmaker: bkName, home: oh, draw: od, away: oa });
+  }
+  return out;
+}
+
+async function fetchAllBookmakerOdds(leagueKey, home, away) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
+    const res = await fetch(evUrl, { signal: controller.signal }).catch(() => null);
+    clearTimeout(timer);
+    if (!res || !res.ok) return [];
+    const events = await res.json().catch(() => null);
+    const list = Array.isArray(events) ? events : (Array.isArray(events?.data) ? events.data : null);
+    if (!Array.isArray(list)) return [];
+
+    const direct = list.find(ev => isSameClubName(leagueKey, home, ev.home) && isSameClubName(leagueKey, away, ev.away));
+    const swapped = direct ? null : list.find(ev => isSameClubName(leagueKey, home, ev.away) && isSameClubName(leagueKey, away, ev.home));
+    const match = direct || swapped;
+    if (!match) return [];
+
+    const oddsUrl = `https://api.odds-api.io/v3/odds?apiKey=${ODDS_API_IO_KEY}&eventId=${match.id}`;
+    const oddsRes = await fetch(oddsUrl).catch(() => null);
+    if (!oddsRes || !oddsRes.ok) return [];
+    const oddsData = await oddsRes.json().catch(() => null);
+    return extractAllBookmakerOddsFromOddsApiIo(leagueKey, home, away, oddsData, !!swapped);
+  } catch (e) {
+    return [];
+  }
+}
+
+function OddsComparisonPanel({leagueKey, home, away, modelProbs, onFairProbs}) {
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    const list = await fetchAllBookmakerOdds(leagueKey, home, away);
+    setRows(list);
+    if (!list.length) setError("이 경기의 배당 데이터를 찾지 못했습니다 (아직 미개장이거나 매칭 실패).");
+    setLoading(false);
+  }, [leagueKey, home, away]);
+
+  const best = useMemo(() => {
+    if (!rows || !rows.length) return null;
+    return { home: Math.max(...rows.map(r=>r.home)), draw: Math.max(...rows.map(r=>r.draw||0)), away: Math.max(...rows.map(r=>r.away)) };
+  }, [rows]);
+
+  useEffect(() => {
+    if (!best) return;
+    const fair = devigOdds(best);
+    if (fair && typeof onFairProbs === "function") onFairProbs(fair);
+  }, [best]);
+
+  return (
+    <Card>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+        <div>
+          <div style={{fontSize:12, fontWeight:700, color:T.text}}>📊 배당 비교 대시보드</div>
+          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>여러 북메이커 1X2 배당을 나란히 비교합니다</div>
+        </div>
+        <button onClick={load} disabled={loading}
+          style={{fontSize:11, color:"#fff", background: loading?T.dim:T.accent,
+                  border:"none", borderRadius:8, padding:"7px 12px", cursor:loading?"default":"pointer", whiteSpace:"nowrap"}}>
+          {loading ? "조회 중..." : (rows ? "🔄 새로고침" : "배당 불러오기")}
+        </button>
+      </div>
+      {error && <div style={{fontSize:11.5, color:T.gold, marginTop:8}}>{error}</div>}
+      {rows && rows.length > 0 && (
+        <div style={{marginTop:10, overflowX:"auto"}}>
+          <table style={{width:"100%", borderCollapse:"collapse", fontSize:12}}>
+            <thead>
+              <tr style={{color:T.muted, borderBottom:`1px solid ${T.border}`}}>
+                <th style={{textAlign:"left", padding:"6px 4px"}}>북메이커</th>
+                <th style={{padding:"6px 4px"}}>홈</th><th style={{padding:"6px 4px"}}>무</th><th style={{padding:"6px 4px"}}>원정</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r,i) => (
+                <tr key={i} style={{borderBottom:`1px solid ${T.border}55`}}>
+                  <td style={{padding:"6px 4px", color:T.text, fontWeight:600}}>{r.bookmaker}</td>
+                  {["home","draw","away"].map(k => (
+                    <td key={k} style={{padding:"6px 4px", textAlign:"center",
+                      color: best && r[k]===best[k] ? T.green : T.text, fontWeight: best && r[k]===best[k] ? 800 : 600}}>
+                      {r[k] ? r[k].toFixed(2) : "-"}{best && r[k]===best[k] ? " 👑" : ""}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {best && modelProbs && (() => {
+            const evHome = computeEV(modelProbs.home, best.home);
+            const evDraw = computeEV(modelProbs.draw, best.draw);
+            const evAway = computeEV(modelProbs.away, best.away);
+            return (
+              <div style={{marginTop:10, paddingTop:8, borderTop:`1px dashed ${T.border}`}}>
+                <div style={{fontSize:11, color:T.muted, marginBottom:6}}>최고 배당 기준 EV = 모델확률×배당 − 1</div>
+                <div style={{display:"flex", gap:8}}>
+                  {[{label:"홈", ev:evHome},{label:"무", ev:evDraw},{label:"원정", ev:evAway}].map(({label,ev}) => (
+                    <div key={label} style={{flex:1, textAlign:"center", padding:"8px 4px", borderRadius:8,
+                      background:T.surface, border:`1px solid ${ev!==null && ev>0.03 ? T.green : T.border}`}}>
+                      <div style={{fontSize:10.5, color:T.muted}}>{label}</div>
+                      <div style={{fontSize:13.5, fontWeight:800, marginTop:2, color: ev===null?"gray":ev>0.03?T.green:ev<-0.03?T.red:T.text}}>
+                        {ev===null?"-":`${ev>=0?"+":""}${(ev*100).toFixed(1)}%`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ============================================================ 예측 결과 공유 카드 (EPL 앱 이식)
+// 로고가 없는 팀(승격팀 등)은 CLUB_ABBR 약어를 원형 배지로 그려서 대체한다.
+function loadImageAsync(src) {
+  return new Promise((resolve, reject) => {
+    if (!src) { reject(new Error("no src")); return; }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+function drawAbbrBadge(ctx, abbr, cx, cy, r) {
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2);
+  ctx.fillStyle = "#182640"; ctx.fill();
+  ctx.strokeStyle = "#2979ff"; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = "#e8f0fe";
+  ctx.font = `bold ${Math.round(r*0.55)}px sans-serif`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(abbr, cx, cy+2);
+  ctx.restore();
+}
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
+}
+async function generateShareImage(leagueKey, home, away, result) {
+  const W = 750, H = 1000;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0, "#05080f"); grad.addColorStop(1, "#0b1220");
+  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#2979ff"; ctx.font = "bold 26px sans-serif";
+  ctx.fillText(`⚽ ${LEAGUES[leagueKey].label} 예측기`, W/2, 58);
+  ctx.fillStyle = "#6b8aad"; ctx.font = "14px sans-serif";
+  ctx.fillText("ELO + xG 블렌딩 · 몬테카를로 10만회", W/2, 86);
+
+  const crestSize = 110;
+  try {
+    const homeImg = await loadImageAsync(CLUB_LOGOS[home]);
+    ctx.drawImage(homeImg, W*0.24 - crestSize/2, 130, crestSize, crestSize);
+  } catch (e) { drawAbbrBadge(ctx, clubAbbr(home), W*0.24, 130+crestSize/2, crestSize/2); }
+  try {
+    const awayImg = await loadImageAsync(CLUB_LOGOS[away]);
+    ctx.drawImage(awayImg, W*0.76 - crestSize/2, 130, crestSize, crestSize);
+  } catch (e) { drawAbbrBadge(ctx, clubAbbr(away), W*0.76, 130+crestSize/2, crestSize/2); }
+
+  ctx.fillStyle = "#e8f0fe"; ctx.font = "bold 20px sans-serif";
+  ctx.fillText(home, W*0.24, 275); ctx.fillText(away, W*0.76, 275);
+  ctx.fillStyle = "#6b8aad"; ctx.font = "bold 26px sans-serif";
+  ctx.fillText("VS", W/2, 195);
+
+  const top = result.topScores?.[0];
+  if (top) {
+    const [hg, ag] = top.score.split("-");
+    ctx.fillStyle = "#00bcd4"; ctx.font = "bold 66px sans-serif";
+    ctx.fillText(`${hg} : ${ag}`, W/2, 380);
+    ctx.fillStyle = "#6b8aad"; ctx.font = "14px sans-serif";
+    ctx.fillText(`자체 모델 예상 스코어 · 확률 ${(top.prob*100).toFixed(1)}%`, W/2, 406);
+  }
+
+  const barX = 60, barY = 450, barW = W-120, barH = 46;
+  const hw = result.homeWinProb, dw = result.drawProb, aw = result.awayWinProb;
+  ctx.save(); roundRectPath(ctx, barX, barY, barW, barH, 12); ctx.clip();
+  let x = barX;
+  for (const seg of [{w:barW*hw, color:"#2979ff"}, {w:barW*dw, color:"#6b8aad"}, {w:barW*aw, color:"#f5a623"}]) {
+    ctx.fillStyle = seg.color; ctx.fillRect(x, barY, seg.w+1, barH); x += seg.w;
+  }
+  ctx.restore();
+
+  ctx.font = "bold 16px sans-serif"; ctx.fillStyle = "#fff";
+  ctx.textAlign = "left"; ctx.fillText(`${(hw*100).toFixed(0)}%`, barX+12, barY+barH/2+6);
+  ctx.textAlign = "right"; ctx.fillText(`${(aw*100).toFixed(0)}%`, barX+barW-12, barY+barH/2+6);
+  ctx.textAlign = "center";
+  if (dw > 0.08) ctx.fillText(`${(dw*100).toFixed(0)}%`, barX+barW*hw+barW*dw/2, barY+barH/2+6);
+
+  ctx.font = "13px sans-serif"; ctx.fillStyle = "#6b8aad";
+  ctx.fillText(`${home} 승  ·  무승부  ·  ${away} 승`, W/2, barY+barH+26);
+
+  ctx.font = "17px sans-serif"; ctx.fillStyle = "#e8f0fe";
+  ctx.fillText(`예상 기대득점(λ)  ${result.lambdaHome.toFixed(2)} : ${result.lambdaAway.toFixed(2)}`, W/2, 570);
+
+  ctx.font = "12px sans-serif"; ctx.fillStyle = "#2a3f5f";
+  ctx.fillText(`생성일 ${new Date().toLocaleDateString("ko-KR")} · 통계 모델 기반 예측(참고용)`, W/2, H-42);
+  ctx.fillText("v1.0 · 유럽 6대리그 예측기", W/2, H-22);
+  return canvas;
+}
+
+function ShareResultPanel({leagueKey, home, away, result}) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const handleShare = useCallback(() => {
+    setBusy(true); setMsg("");
+    generateShareImage(leagueKey, home, away, result).then(canvas => {
+      canvas.toBlob(async (blob) => {
+        if (!blob) { setBusy(false); setMsg("이미지 생성에 실패했습니다."); return; }
+        const fileName = `${home}_vs_${away}_예측.png`;
+        const file = (typeof File !== "undefined") ? new File([blob], fileName, {type:"image/png"}) : null;
+        try {
+          if (file && navigator.canShare && navigator.canShare({files:[file]})) {
+            await navigator.share({ files:[file], title:`${home} vs ${away} 예측`, text:`${LEAGUES[leagueKey].label} 예측기 결과` });
+            setMsg("공유 완료!");
+          } else {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url; a.download = fileName;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(()=>URL.revokeObjectURL(url), 5000);
+            setMsg("이미지가 다운로드됐습니다.");
+          }
+        } catch (e) { setMsg("공유가 취소되었거나 실패했습니다."); }
+        finally { setBusy(false); }
+      }, "image/png");
+    }).catch(() => { setBusy(false); setMsg("이미지 생성 중 오류가 발생했습니다."); });
+  }, [leagueKey, home, away, result]);
+
+  return (
+    <Card style={{textAlign:"center"}}>
+      <div style={{fontSize:12, fontWeight:700, color:T.text}}>🖼️ 예측 결과 공유</div>
+      <div style={{fontSize:10.5, color:T.dim, marginTop:2, marginBottom:8}}>이미지 카드로 저장하거나 공유합니다</div>
+      <button onClick={handleShare} disabled={busy}
+        style={{width:"100%", padding:"12px", borderRadius:10, border:"none",
+                background: busy ? T.dim : T.purple, color:"#fff", fontSize:14, fontWeight:800, cursor:busy?"default":"pointer"}}>
+        {busy ? "이미지 생성 중..." : "📤 공유 카드 만들기"}
+      </button>
+      {msg && <div style={{fontSize:11.5, color:T.muted, marginTop:8}}>{msg}</div>}
+    </Card>
+  );
+}
+
 function PredictTab({ leagueKey }) {
   const teams = LEAGUES[leagueKey].teams;
   const [home, setHome] = useState(teams[0]);
@@ -1074,32 +1490,24 @@ function PredictTab({ leagueKey }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [odds, setOdds] = useState(null);       // { home, draw, away, source } 또는 null
-  const [oddsState, setOddsState] = useState("idle"); // idle | loading | done | notfound
+  const [marketFairProbs, setMarketFairProbs] = useState(null); // 배당 비교 대시보드에서 최고 배당 devig 확률 수신 (모델-시장 괴리 추적용)
 
   useEffect(() => {
     setHome(teams[0]); setAway(teams[1]); setResult(null); setSaved(false);
-    setOdds(null); setOddsState("idle");
+    setMarketFairProbs(null);
   }, [leagueKey]);
 
   const run = useCallback(() => {
     if (home === away) return;
     setLoading(true);
     setSaved(false);
-    setOdds(null); setOddsState("idle");
+    setMarketFairProbs(null);
     // 몬테카를로 10만회 시뮬레이션은 동기 연산이라 다음 프레임으로 넘겨 버튼 반응성 확보
     setTimeout(() => {
       setResult(predictMatchV2(leagueKey, home, away, 100000));
       setLoading(false);
     }, 0);
   }, [home, away]);
-
-  const fetchOdds = useCallback(async () => {
-    setOddsState("loading");
-    const raw = await fetchMatchOdds(leagueKey, home, away);
-    if (raw) { setOdds(raw); setOddsState("done"); }
-    else { setOdds(null); setOddsState("notfound"); }
-  }, [leagueKey, home, away]);
 
   const saveToHistory = useCallback(async () => {
     if (!result) return;
@@ -1108,6 +1516,7 @@ function PredictTab({ leagueKey }) {
       const entry = {
         id, league: leagueKey, home: result.home, away: result.away,
         homeWinProb: result.homeWinProb, drawProb: result.drawProb, awayWinProb: result.awayWinProb,
+        marketProbs: marketFairProbs || null,
         topScore: result.topScores[0]?.score || null,
         savedAt: new Date().toISOString(),
         settled: false, actualHome: null, actualAway: null,
@@ -1121,7 +1530,7 @@ function PredictTab({ leagueKey }) {
     } catch (e) {
       console.error("예측 저장 실패:", e);
     }
-  }, [result, leagueKey]);
+  }, [result, leagueKey, marketFairProbs]);
 
   return (
     <div>
@@ -1178,6 +1587,10 @@ function PredictTab({ leagueKey }) {
 
           <TeamStyleRadarCard leagueKey={leagueKey} home={home} away={away}/>
 
+          <PredictionExplainCard home={home} away={away} result={result}/>
+
+          <LiveInPlayPanel home={home} away={away} lambdaHome={result.lambdaHome} lambdaAway={result.lambdaAway}/>
+
           <Card>
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>예상 스코어 Top 5</div>
             {result.topScores.map((s,i) => (
@@ -1206,60 +1619,18 @@ function PredictTab({ leagueKey }) {
             {saved ? "✅ 기록 탭에 저장됨" : "📝 이 예측 기록에 저장"}
           </button>
 
-          <Card>
-            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
-              <div style={{fontSize:12, fontWeight:700, color:T.text}}>💹 실시간 배당 비교</div>
-              <button onClick={fetchOdds} disabled={oddsState==="loading"}
-                style={{padding:"5px 10px", borderRadius:8, border:`1px solid ${T.border}`, background:T.surface,
-                        color:T.cyan, fontSize:11, cursor: oddsState==="loading" ? "default" : "pointer"}}>
-                {oddsState==="loading" ? "조회 중..." : "배당 조회"}
-              </button>
-            </div>
-            {oddsState === "idle" && <div style={{fontSize:11.5, color:T.dim}}>배당 조회를 누르면 시장 배당과 모델 예측을 비교합니다 (odds-api.io 무료 티어).</div>}
-            {oddsState === "notfound" && <div style={{fontSize:11.5, color:T.dim}}>이 매치업의 배당을 찾지 못했습니다 (아직 미개장이거나 매칭 실패).</div>}
-            {oddsState === "done" && odds && (() => {
-              const fair = devigOdds(odds);
-              return (
-                <div>
-                  <div style={{fontSize:10.5, color:T.dim, marginBottom:6}}>출처: {odds.source} · 배당 {odds.home}/{odds.draw}/{odds.away}</div>
-                  {fair && (
-                    <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, fontSize:11.5, textAlign:"center"}}>
-                      {[
-                        {label:home, model:result.homeWinProb, fair:fair.home, oddsVal:odds.home},
-                        {label:"무", model:result.drawProb, fair:fair.draw, oddsVal:odds.draw},
-                        {label:away, model:result.awayWinProb, fair:fair.away, oddsVal:odds.away},
-                      ].map((c,i) => {
-                        const ev = computeEV(c.model, c.oddsVal);
-                        return (
-                          <div key={i} style={{background:T.surface, borderRadius:8, padding:"6px 4px"}}>
-                            <div style={{color:T.muted, fontSize:10}}>{c.label}</div>
-                            <div style={{color:T.text, fontWeight:700}}>모델 {(c.model*100).toFixed(0)}%</div>
-                            <div style={{color:T.muted}}>시장 {(c.fair*100).toFixed(0)}%</div>
-                            {ev != null && (
-                              <div style={{color: ev>0?T.green:T.red, fontWeight:700, marginTop:2}}>
-                                EV {ev>0?"+":""}{(ev*100).toFixed(0)}%
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <div style={{fontSize:10, color:T.dim, marginTop:8, lineHeight:1.5}}>
-                    EV(기대값) = 모델확률×배당 − 1. 양수면 모델이 시장보다 그 결과를 더 유력하게 본다는 뜻이지,
-                    실제 적중을 보장하진 않습니다.
-                  </div>
-                </div>
-              );
-            })()}
-          </Card>
+          <OddsComparisonPanel leagueKey={leagueKey} home={home} away={away}
+            modelProbs={{home: result.homeWinProb, draw: result.drawProb, away: result.awayWinProb}}
+            onFairProbs={setMarketFairProbs}/>
+
+          <ShareResultPanel leagueKey={leagueKey} home={home} away={away} result={result}/>
 
           <div style={{fontSize:10.5, color:T.dim, marginTop:-4, marginBottom:8, lineHeight:1.5, padding:"0 4px"}}>
             ⚠️ Elo 공식 + 몬테카를로(10만회) 시뮬레이션 블렌딩
             {result.xgBlended
               ? " + 실데이터 xG(70:30) 반영된 예측입니다."
               : " 까지만 반영된 상태입니다. 이 매치업은 xG 데이터가 없어(신규 승격팀 등) ELO 기준으로만 계산됐습니다."}
-            {" "}부상·최근폼·라이벌 보정·ML 앙상블은 아직 미반영 — 해당 실데이터가 파이프라인에 들어오면 순차 적용 예정입니다.
+            {" "}최근폼·ML 앙상블은 아직 미반영 — 해당 실데이터가 파이프라인에 들어오면 순차 적용 예정입니다.
           </div>
         </React.Fragment>
       )}
@@ -1595,6 +1966,45 @@ function SettingsTab({ leagueKey, favorites, onToggleFavorite, onDataReset, noti
   );
 }
 
+// ============================================================ 일정 .ics 캘린더 내보내기 (EPL 앱 이식)
+function icsPad2(n) { return String(n).padStart(2, "0"); }
+function icsDateTime(dateStr, timeStr) {
+  const [y, m, d] = dateStr.split("-");
+  const [hh, mm] = (timeStr || "00:00").split(":");
+  return `${y}${m}${d}T${hh}${mm}00`;
+}
+function icsDateTimePlusHours(dateStr, timeStr, hours) {
+  const dt = new Date(`${dateStr}T${timeStr || "00:00"}:00`);
+  dt.setHours(dt.getHours() + hours);
+  return `${dt.getFullYear()}${icsPad2(dt.getMonth()+1)}${icsPad2(dt.getDate())}T${icsPad2(dt.getHours())}${icsPad2(dt.getMinutes())}00`;
+}
+function generateICS(leagueLabel, matches) {
+  const now = new Date();
+  const stamp = `${now.getUTCFullYear()}${icsPad2(now.getUTCMonth()+1)}${icsPad2(now.getUTCDate())}T${icsPad2(now.getUTCHours())}${icsPad2(now.getUTCMinutes())}00Z`;
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//6대리그 예측기//KO", "CALSCALE:GREGORIAN"];
+  matches.forEach((g, i) => {
+    if (!g.date) return;
+    lines.push("BEGIN:VEVENT");
+    lines.push(`UID:${leagueLabel}-${g.date}-${g.time||"00:00"}-${i}@sixleague-predictor`);
+    lines.push(`DTSTAMP:${stamp}`);
+    lines.push(`DTSTART:${icsDateTime(g.date, g.time)}`);
+    lines.push(`DTEND:${icsDateTimePlusHours(g.date, g.time, 2)}`);
+    lines.push(`SUMMARY:⚽ [${leagueLabel}] ${g.home} vs ${g.away}`);
+    lines.push(`DESCRIPTION:${leagueLabel} · ${g.home} vs ${g.away}`);
+    lines.push("END:VEVENT");
+  });
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+function downloadICS(filename, content) {
+  const blob = new Blob([content], {type:"text/calendar;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 function ScheduleTab({ leagueKey }) {
   const lg = LEAGUES[leagueKey];
   if (!SCHEDULE.length) {
@@ -1615,15 +2025,24 @@ function ScheduleTab({ leagueKey }) {
     );
   }
   return (
-    <Card>
-      {SCHEDULE.map((g, i) => (
-        <div key={i} style={{display:"flex", justifyContent:"space-between", padding:"8px 4px",
-          borderBottom: i<SCHEDULE.length-1 ? `1px solid ${T.border}` : "none", fontSize:13}}>
-          <span style={{color:T.text}}>{g.home} vs {g.away}</span>
-          <span style={{color:T.muted, fontSize:11.5}}>{g.date || ""} {g.time ? `${g.time} KST` : ""}</span>
-        </div>
-      ))}
-    </Card>
+    <div>
+      <Card>
+        <button onClick={() => downloadICS(`${lg.label}_일정.ics`, generateICS(lg.label, SCHEDULE))}
+          style={{width:"100%", padding:"10px 0", borderRadius:9, border:`1px solid ${T.border}`,
+                  background:T.surface, color:T.text, fontSize:12.5, fontWeight:700, cursor:"pointer"}}>
+          📅 {lg.label} 일정 캘린더로 내보내기 (.ics)
+        </button>
+      </Card>
+      <Card>
+        {SCHEDULE.map((g, i) => (
+          <div key={i} style={{display:"flex", justifyContent:"space-between", padding:"8px 4px",
+            borderBottom: i<SCHEDULE.length-1 ? `1px solid ${T.border}` : "none", fontSize:13}}>
+            <span style={{color:T.text}}>{g.home} vs {g.away}</span>
+            <span style={{color:T.muted, fontSize:11.5}}>{g.date || ""} {g.time ? `${g.time} KST` : ""}</span>
+          </div>
+        ))}
+      </Card>
+    </div>
   );
 }
 
@@ -1722,6 +2141,68 @@ function AccuracyPanel({ history }) {
   );
 }
 
+// ============================================================ 모델 vs 시장배당 괴리 추적 (EPL 앱 이식)
+function computeModelVsMarketBias(entries) {
+  const valid = (entries || []).filter(h => h && h.settled
+    && h.actualHome != null && h.actualAway != null
+    && h.marketProbs && typeof h.marketProbs.home === "number"
+    && typeof h.homeWinProb === "number");
+  if (!valid.length) return null;
+
+  let biasSum = 0, modelBrierSum = 0, marketBrierSum = 0, modelCloser = 0;
+  for (const h of valid) {
+    const actual = h.actualHome > h.actualAway ? "home" : (h.actualHome < h.actualAway ? "away" : "draw");
+    const oh = actual==="home"?1:0, od = actual==="draw"?1:0, oa = actual==="away"?1:0;
+    biasSum += (h.homeWinProb - h.marketProbs.home);
+    const mBrier = (h.homeWinProb-oh)**2 + (h.drawProb-od)**2 + (h.awayWinProb-oa)**2;
+    const mkBrier = (h.marketProbs.home-oh)**2 + (h.marketProbs.draw-od)**2 + (h.marketProbs.away-oa)**2;
+    modelBrierSum += mBrier; marketBrierSum += mkBrier;
+    if (mBrier < mkBrier) modelCloser++;
+  }
+  return {
+    n: valid.length,
+    avgBias: biasSum / valid.length,
+    modelBrier: modelBrierSum / valid.length,
+    marketBrier: marketBrierSum / valid.length,
+    modelCloserRate: modelCloser / valid.length,
+  };
+}
+
+function ModelVsMarketPanel({history}) {
+  const bias = useMemo(() => computeModelVsMarketBias(history), [history]);
+  if (!bias || bias.n < 5) {
+    return (
+      <Card>
+        <div style={{fontSize:12, fontWeight:700, color:T.text}}>📐 모델 vs 시장배당 괴리</div>
+        <div style={{fontSize:11.5, color:T.muted, textAlign:"center", marginTop:8}}>
+          시장배당과 함께 정산된 예측이 5건 이상 쌓이면 표시됩니다{bias ? ` (현재 ${bias.n}건)` : ""}.
+        </div>
+      </Card>
+    );
+  }
+  const biasPct = bias.avgBias * 100;
+  const biasLabel = Math.abs(biasPct) < 1.5 ? "시장과 거의 일치" : (biasPct > 0 ? "홈팀에 더 낙관적" : "원정팀에 더 낙관적(홈에 비관적)");
+  const biasColor = Math.abs(biasPct) < 1.5 ? T.green : T.gold;
+  return (
+    <Card>
+      <div style={{fontSize:12, fontWeight:700, color:T.text}}>📐 모델 vs 시장배당 괴리</div>
+      <div style={{fontSize:10.5, color:T.dim, marginTop:2, marginBottom:8}}>정산 {bias.n}건 기준</div>
+      <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
+        <div style={{background:T.surface, borderRadius:9, padding:"10px 8px", border:`1px solid ${T.border}`, textAlign:"center"}}>
+          <div style={{fontSize:18, fontWeight:900, color:biasColor}}>{biasPct>=0?"+":""}{biasPct.toFixed(1)}%p</div>
+          <div style={{fontSize:10, color:T.muted, marginTop:2}}>평균 편향(모델−시장)</div>
+          <div style={{fontSize:9.5, color:biasColor, marginTop:2, fontWeight:700}}>{biasLabel}</div>
+        </div>
+        <div style={{background:T.surface, borderRadius:9, padding:"10px 8px", border:`1px solid ${T.border}`, textAlign:"center"}}>
+          <div style={{fontSize:18, fontWeight:900, color: bias.modelCloserRate>0.5 ? T.green : T.red}}>{(bias.modelCloserRate*100).toFixed(0)}%</div>
+          <div style={{fontSize:10, color:T.muted, marginTop:2}}>모델이 시장보다 정확했던 비율</div>
+          <div style={{fontSize:9.5, color:T.dim, marginTop:2}}>모델 {bias.modelBrier.toFixed(3)} · 시장 {bias.marketBrier.toFixed(3)}</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function HistoryTab({ leagueKey }) {
   const [history, setHistory] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1793,6 +2274,7 @@ function HistoryTab({ leagueKey }) {
       </Card>
 
       <AccuracyPanel history={history}/>
+      <ModelVsMarketPanel history={history}/>
 
       {history.length === 0 ? (
         <Card>
@@ -2051,6 +2533,36 @@ function App() {
     const timer = setInterval(check, 30000);
     return () => clearInterval(timer);
   }, [notifyEnabled, favorites, leagueVersion]);
+
+  // 부상자 변경 알림 (EPL 앱 이식) — 리그 전환/새로고침 시 즐겨찾기 팀의 TEAM_INJURIES를
+  // 직전 방문 스냅샷과 비교해서 새로 추가된 항목이 있으면 알림. (이적 데이터는 이 앱에
+  // 아직 없어 부상만 대상 — TRANSFERS 구조가 파이프라인에 추가되면 확장 가능)
+  useEffect(() => {
+    if (!notifyEnabled || !favorites.length) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    (async () => {
+      const snapKey = `wc:injurySnapshot:${leagueKey}`;
+      let snapshot = {};
+      try {
+        const r = await window.storage.get(snapKey);
+        if (r && r.value) snapshot = JSON.parse(r.value);
+      } catch (e) {}
+      const nextSnapshot = { ...snapshot };
+      for (const team of favorites) {
+        const inj = TEAM_INJURIES[team];
+        const current = inj ? [...(inj.keyOut||[]).map(n=>`핵심:${n}`), ...(inj.injured||[]).map(n=>`로테이션:${n}`)] : [];
+        const prev = snapshot[team] || [];
+        const newItems = current.filter(x => !prev.includes(x));
+        if (prev.length > 0 && newItems.length > 0) {
+          try {
+            new Notification(`🩹 ${team} 부상자 소식 업데이트`, { body: newItems.slice(0,3).join(" · ") });
+          } catch (e) {}
+        }
+        nextSnapshot[team] = current;
+      }
+      window.storage.set(snapKey, JSON.stringify(nextSnapshot)).catch(() => {});
+    })();
+  }, [notifyEnabled, favorites, leagueVersion, leagueKey]);
 
   useEffect(() => {
     (async () => {
