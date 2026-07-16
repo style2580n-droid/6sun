@@ -465,13 +465,18 @@ function fatigueLambdaAdjust(team) {
 let TEAM_XG = {};    // { 팀명: { xG, xGA } } — collect_xg_bsd.py의 teamXg 필드
                       // (24-25/25-26 시즌 평균, 26-27 신규 승격팀은 항목이 없을 수 있음 — 정상)
 
+// TRANSFERS: EPL 앱의 TRANSFERS와 동일 구조 — { 팀명: { in:[{player,from,date}], out:[{player,to,date}] } }.
+// collect_transfers_bsd.py는 예전부터 6개 리그 이적도 감지해서 쌓아뒀는데, app_export_multileague.py
+// 출력에 안 붙어있어서 이 앱까지 못 왔었다 (2026-07-16 파이프라인 쪽에서 연결 완료).
+let TRANSFERS = {};
+
 async function loadPipelineData(leagueKey) {
   try {
     await fetchPipelineDataMultileague();
     const globalKey = `PIPELINE_DATA_${leagueKey.toUpperCase()}`;
     const data = (typeof window !== "undefined") ? window[globalKey] : null;
-    if (!data) return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false };
-    let scheduleLoaded = false, logosLoaded = false, squadsLoaded = false, xgLoaded = false, injuriesLoaded = false, fatigueLoaded = false;
+    if (!data) return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false };
+    let scheduleLoaded = false, logosLoaded = false, squadsLoaded = false, xgLoaded = false, injuriesLoaded = false, fatigueLoaded = false, transfersLoaded = false;
     if (Array.isArray(data.schedule) && data.schedule.length) {
       SCHEDULE = data.schedule;
       scheduleLoaded = true;
@@ -501,9 +506,14 @@ async function loadPipelineData(leagueKey) {
       TEAM_FATIGUE = data.fatigue;
       fatigueLoaded = true;
     }
-    return { scheduleLoaded, logosLoaded, squadsLoaded, xgLoaded, injuriesLoaded, fatigueLoaded };
+    // 이적(영입/이탈): { 팀명: { in:[...], out:[...] } } — 2026-07-16 파이프라인에 연결됨
+    if (data.transfers && typeof data.transfers === "object" && Object.keys(data.transfers).length) {
+      TRANSFERS = data.transfers;
+      transfersLoaded = true;
+    }
+    return { scheduleLoaded, logosLoaded, squadsLoaded, xgLoaded, injuriesLoaded, fatigueLoaded, transfersLoaded };
   } catch (e) {
-    return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false };
+    return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false };
   }
 }
 
@@ -679,6 +689,7 @@ function switchLeagueData(leagueKey) {
   TEAM_XG = {};
   TEAM_INJURIES = {};
   TEAM_FATIGUE = {};
+  TRANSFERS = {};
 }
 
 // ============================================================ 예측 엔진 v2 (EPL 앱에서 검증된 순수 함수 이식)
@@ -2363,6 +2374,56 @@ function HistoryTab({ leagueKey }) {
   );
 }
 
+// TransfersPanel: EPL 앱(index.html)의 TransfersPanel과 동일 구조/스타일로 이식.
+// { player, from/to, date } 필드 그대로 사용 — app_export_multileague.py의
+// build_transfers()가 이 형식으로 만들어준다.
+function TransfersPanel({ team }) {
+  const t = TRANSFERS[team];
+  const inList = t?.in || [];
+  const outList = t?.out || [];
+  if (!inList.length && !outList.length) return null;
+
+  const fmtDate = d => {
+    if (!d) return "";
+    try { return new Date(d).toLocaleDateString("ko-KR", {year:"2-digit", month:"2-digit", day:"2-digit"}); }
+    catch { return d; }
+  };
+
+  return (
+    <Card>
+      <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:8}}>🔄 최근 이적</div>
+      {inList.length > 0 && (
+        <div style={{marginBottom: outList.length ? 12 : 0}}>
+          <div style={{fontSize:11.5, fontWeight:700, color:T.green, marginBottom:6}}>⬇ 영입</div>
+          <div style={{display:"flex", flexDirection:"column", gap:5}}>
+            {inList.map((tr, i) => (
+              <div key={i} style={{fontSize:12.5, color:T.text}}>
+                <b>{tr.player}</b>
+                <span style={{color:T.muted}}> ← {tr.from}</span>
+                {tr.date && <span style={{color:T.dim, fontSize:10.5}}> ({fmtDate(tr.date)})</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {outList.length > 0 && (
+        <div>
+          <div style={{fontSize:11.5, fontWeight:700, color:T.red, marginBottom:6}}>⬆ 이탈</div>
+          <div style={{display:"flex", flexDirection:"column", gap:5}}>
+            {outList.map((tr, i) => (
+              <div key={i} style={{fontSize:12.5, color:T.text}}>
+                <b>{tr.player}</b>
+                <span style={{color:T.muted}}> → {tr.to}</span>
+                {tr.date && <span style={{color:T.dim, fontSize:10.5}}> ({fmtDate(tr.date)})</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function SquadTab({ leagueKey }) {
   const lg = LEAGUES[leagueKey];
   const teams = lg.teams;
@@ -2457,6 +2518,8 @@ function SquadTab({ leagueKey }) {
               </Card>
             );
           })()}
+
+          <TransfersPanel team={team}/>
 
           <Card>
             <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
@@ -2576,8 +2639,7 @@ function App() {
   }, [notifyEnabled, favorites, leagueVersion]);
 
   // 부상자 변경 알림 (EPL 앱 이식) — 리그 전환/새로고침 시 즐겨찾기 팀의 TEAM_INJURIES를
-  // 직전 방문 스냅샷과 비교해서 새로 추가된 항목이 있으면 알림. (이적 데이터는 이 앱에
-  // 아직 없어 부상만 대상 — TRANSFERS 구조가 파이프라인에 추가되면 확장 가능)
+  // 직전 방문 스냅샷과 비교해서 새로 추가된 항목이 있으면 알림.
   useEffect(() => {
     if (!notifyEnabled || !favorites.length) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
@@ -2597,6 +2659,39 @@ function App() {
         if (prev.length > 0 && newItems.length > 0) {
           try {
             new Notification(`🩹 ${team} 부상자 소식 업데이트`, { body: newItems.slice(0,3).join(" · ") });
+          } catch (e) {}
+        }
+        nextSnapshot[team] = current;
+      }
+      window.storage.set(snapKey, JSON.stringify(nextSnapshot)).catch(() => {});
+    })();
+  }, [notifyEnabled, favorites, leagueVersion, leagueKey]);
+
+  // 이적 변경 알림 (2026-07-16 추가, EPL 앱엔 없던 기능 — 이 앱은 TRANSFERS가
+  // 팀당 최근 20건 누적이라 "새로 생긴 항목"을 감지하기 좋음) — 부상 알림과
+  // 완전히 동일한 스냅샷-diff 패턴, 영입/이탈을 합쳐서 한 스냅샷으로 비교.
+  useEffect(() => {
+    if (!notifyEnabled || !favorites.length) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    (async () => {
+      const snapKey = `wc:transferSnapshot:${leagueKey}`;
+      let snapshot = {};
+      try {
+        const r = await window.storage.get(snapKey);
+        if (r && r.value) snapshot = JSON.parse(r.value);
+      } catch (e) {}
+      const nextSnapshot = { ...snapshot };
+      for (const team of favorites) {
+        const tr = TRANSFERS[team];
+        const current = tr ? [
+          ...(tr.in||[]).map(x=>`영입:${x.player}(${x.from})`),
+          ...(tr.out||[]).map(x=>`이탈:${x.player}(${x.to})`),
+        ] : [];
+        const prev = snapshot[team] || [];
+        const newItems = current.filter(x => !prev.includes(x));
+        if (prev.length > 0 && newItems.length > 0) {
+          try {
+            new Notification(`🔄 ${team} 이적 소식 업데이트`, { body: newItems.slice(0,3).join(" · ") });
           } catch (e) {}
         }
         nextSnapshot[team] = current;
