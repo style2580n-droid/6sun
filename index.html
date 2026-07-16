@@ -1580,8 +1580,8 @@ function PredictTab({ leagueKey }) {
       {result && (
         <React.Fragment>
           <Card>
-            <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
-              {home} <span style={{color:T.dim}}>({clubAbbr(home)})</span> vs {away} <span style={{color:T.dim}}>({clubAbbr(away)})</span>
+            <div style={{fontSize:12, color:T.muted, marginBottom:10, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
+              <TeamCrest name={home} size={20}/> {home} <span style={{color:T.dim}}>({clubAbbr(home)})</span> vs <TeamCrest name={away} size={20}/> {away} <span style={{color:T.dim}}>({clubAbbr(away)})</span>
               <span style={{color:T.dim}}> · Elo {ELO[home]??1500} vs {ELO[away]??1500}</span>
             </div>
             {result.rivalry && (
@@ -1697,6 +1697,7 @@ function RankingTab({ leagueKey }) {
         <div key={t} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 4px",
           borderBottom: i<teams.length-1 ? `1px solid ${T.border}` : "none"}}>
           <span style={{width:22, fontSize:12, color:T.muted, fontWeight:700}}>{i+1}</span>
+          <TeamCrest name={t} size={20}/>
           <span style={{flex:1, fontSize:13, color:T.text}}>{t}</span>
           <span style={{fontSize:12.5, color:T.accent, fontWeight:700}}>{ELO[t] ?? 1500}</span>
         </div>
@@ -1758,7 +1759,7 @@ function SeasonOutlookTab({ leagueKey }) {
             {result.table.filter(r => r.titleProb > 0.005).slice(0, 8).map((r, i) => (
               <div key={r.team} style={{marginBottom:6}}>
                 <div style={{display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:3}}>
-                  <span style={{color:T.text}}>{i+1}. {r.team}</span>
+                  <span style={{color:T.text, display:"flex", alignItems:"center", gap:6}}>{i+1}. <TeamCrest name={r.team} size={18}/> {r.team}</span>
                   <span style={{color:T.gold, fontWeight:700}}>{(r.titleProb*100).toFixed(1)}%</span>
                 </div>
                 <div style={{height:6, borderRadius:3, background:T.surface, overflow:"hidden"}}>
@@ -1775,7 +1776,7 @@ function SeasonOutlookTab({ leagueKey }) {
             {[...result.table].sort((a,b)=>b.relegationProb-a.relegationProb).filter(r => r.relegationProb > 0.01).slice(0, 8).map((r) => (
               <div key={r.team} style={{marginBottom:6}}>
                 <div style={{display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:3}}>
-                  <span style={{color:T.text}}>{r.team}</span>
+                  <span style={{color:T.text, display:"flex", alignItems:"center", gap:6}}><TeamCrest name={r.team} size={18}/> {r.team}</span>
                   <span style={{color:T.red, fontWeight:700}}>{(r.relegationProb*100).toFixed(1)}%</span>
                 </div>
                 <div style={{height:6, borderRadius:3, background:T.surface, overflow:"hidden"}}>
@@ -1851,7 +1852,10 @@ function StandingsTab({ leagueKey }) {
         <div key={r.team} style={{display:"flex", alignItems:"center", padding:"7px 4px",
           borderBottom: i<rows.length-1 ? `1px solid ${T.border}` : "none"}}>
           <span style={{width:22, fontSize:12, color:T.muted, fontWeight:700}}>{i+1}</span>
-          <span style={{flex:1, fontSize:13, color:T.text}}>{r.team}</span>
+          <div style={{flex:1, display:"flex", alignItems:"center", gap:6, minWidth:0}}>
+            <TeamCrest name={r.team} size={20}/>
+            <span style={{fontSize:13, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{r.team}</span>
+          </div>
           <span style={{width:26, textAlign:"center", fontSize:11.5, color:T.muted}}>{r.p}</span>
           <span style={{width:56, textAlign:"center", fontSize:11, color:T.muted}}>{r.w}-{r.d}-{r.l}</span>
           <span style={{width:34, textAlign:"center", fontSize:11.5, color: r.gd>0?T.green:(r.gd<0?T.red:T.muted)}}>{r.gd>0?`+${r.gd}`:r.gd}</span>
@@ -1931,8 +1935,10 @@ function SettingsTab({ leagueKey, favorites, onToggleFavorite, onDataReset, noti
         ) : (
           upcomingFavMatches.map((g, i) => (
             <div key={i} style={{fontSize:12.5, color:T.text, padding:"6px 0", borderBottom: i<upcomingFavMatches.length-1 ? `1px solid ${T.border}` : "none",
-              display:"flex", justifyContent:"space-between"}}>
-              <span>⚽ {g.home} vs {g.away}</span>
+              display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+              <span style={{display:"flex", alignItems:"center", gap:6}}>
+                <TeamCrest name={g.home} size={18}/> {g.home} vs {g.away} <TeamCrest name={g.away} size={18}/>
+              </span>
               <span style={{color:T.muted, fontSize:11}}>{g.date} {g.time} KST</span>
             </div>
           ))
@@ -2037,6 +2043,14 @@ function ScheduleTab({ leagueKey }) {
       </Card>
     );
   }
+  // 날짜별로 묶어서 EPL 앱과 비슷한 카드 구조로 표시
+  const byDate = {};
+  for (const g of SCHEDULE) {
+    const key = g.date || "날짜 미정";
+    (byDate[key] = byDate[key] || []).push(g);
+  }
+  const dates = Object.keys(byDate).sort();
+
   return (
     <div>
       <Card>
@@ -2046,15 +2060,24 @@ function ScheduleTab({ leagueKey }) {
           📅 {lg.label} 일정 캘린더로 내보내기 (.ics)
         </button>
       </Card>
-      <Card>
-        {SCHEDULE.map((g, i) => (
-          <div key={i} style={{display:"flex", justifyContent:"space-between", padding:"8px 4px",
-            borderBottom: i<SCHEDULE.length-1 ? `1px solid ${T.border}` : "none", fontSize:13}}>
-            <span style={{color:T.text}}>{g.home} vs {g.away}</span>
-            <span style={{color:T.muted, fontSize:11.5}}>{g.date || ""} {g.time ? `${g.time} KST` : ""}</span>
-          </div>
-        ))}
-      </Card>
+      {dates.map(date => (
+        <Card key={date}>
+          <div style={{fontSize:12.5, fontWeight:800, color:T.cyan, marginBottom:8}}>📅 {date}</div>
+          {byDate[date].map((g, i) => (
+            <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 4px",
+              borderBottom: i<byDate[date].length-1 ? `1px solid ${T.border}` : "none"}}>
+              <span style={{color:T.muted, fontSize:11, width:44, flexShrink:0}}>{g.time ? `${g.time}` : ""}</span>
+              <div style={{flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8, minWidth:0}}>
+                <TeamCrest name={g.home} size={22}/>
+                <span style={{color:T.text, fontSize:12.5, textAlign:"right", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.home}</span>
+                <span style={{color:T.dim, fontSize:11}}>vs</span>
+                <span style={{color:T.text, fontSize:12.5, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.away}</span>
+                <TeamCrest name={g.away} size={22}/>
+              </div>
+            </div>
+          ))}
+        </Card>
+      ))}
     </div>
   );
 }
@@ -2300,7 +2323,9 @@ function HistoryTab({ leagueKey }) {
           {history.map(h => (
             <Card key={h.id} style={{marginBottom:8}}>
               <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6}}>
-                <span style={{fontSize:13, color:T.text, fontWeight:700}}>{h.home} vs {h.away}</span>
+                <span style={{fontSize:13, color:T.text, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
+                  <TeamCrest name={h.home} size={20}/> {h.home} vs {h.away} <TeamCrest name={h.away} size={20}/>
+                </span>
                 <button onClick={()=>removeEntry(h.id)} style={{background:"none", border:"none", color:T.dim, fontSize:11, cursor:"pointer"}}>삭제</button>
               </div>
               <div style={{fontSize:11, color:T.muted, marginBottom:6}}>
@@ -2378,9 +2403,12 @@ function SquadTab({ leagueKey }) {
         <>
           <Card>
             <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-              <div>
-                <div style={{fontSize:17, fontWeight:800, color:T.text}}>{team}</div>
-                <div style={{fontSize:12, color:T.muted}}>{lg.label} · 선수 {players.length}명</div>
+              <div style={{display:"flex", alignItems:"center", gap:10}}>
+                <TeamCrest name={team} size={38}/>
+                <div>
+                  <div style={{fontSize:17, fontWeight:800, color:T.text}}>{team}</div>
+                  <div style={{fontSize:12, color:T.muted}}>{lg.label} · 선수 {players.length}명</div>
+                </div>
               </div>
             </div>
             <div style={{display:"flex", gap:14, marginTop:12, fontSize:12}}>
