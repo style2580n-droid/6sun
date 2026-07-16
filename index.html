@@ -470,13 +470,16 @@ let TEAM_XG = {};    // { 팀명: { xG, xGA } } — collect_xg_bsd.py의 teamXg 
 // 출력에 안 붙어있어서 이 앱까지 못 왔었다 (2026-07-16 파이프라인 쪽에서 연결 완료).
 let TRANSFERS = {};
 
+// H2H: EPL 앱과 동일 구조 — { "팀A|||팀B"(가나다순): [{home,away,homeGoals,awayGoals,date}, ...] }
+let H2H = {};
+
 async function loadPipelineData(leagueKey) {
   try {
     await fetchPipelineDataMultileague();
     const globalKey = `PIPELINE_DATA_${leagueKey.toUpperCase()}`;
     const data = (typeof window !== "undefined") ? window[globalKey] : null;
-    if (!data) return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false };
-    let scheduleLoaded = false, logosLoaded = false, squadsLoaded = false, xgLoaded = false, injuriesLoaded = false, fatigueLoaded = false, transfersLoaded = false;
+    if (!data) return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false, h2hLoaded:false };
+    let scheduleLoaded = false, logosLoaded = false, squadsLoaded = false, xgLoaded = false, injuriesLoaded = false, fatigueLoaded = false, transfersLoaded = false, h2hLoaded = false;
     if (Array.isArray(data.schedule) && data.schedule.length) {
       SCHEDULE = data.schedule;
       scheduleLoaded = true;
@@ -511,9 +514,14 @@ async function loadPipelineData(leagueKey) {
       TRANSFERS = data.transfers;
       transfersLoaded = true;
     }
-    return { scheduleLoaded, logosLoaded, squadsLoaded, xgLoaded, injuriesLoaded, fatigueLoaded, transfersLoaded };
+    // H2H: { "팀A|||팀B": [...] } — 2026-07-16 파이프라인에 연결됨 (EPL 앱과 동일 구조)
+    if (data.h2h && typeof data.h2h === "object" && Object.keys(data.h2h).length) {
+      H2H = data.h2h;
+      h2hLoaded = true;
+    }
+    return { scheduleLoaded, logosLoaded, squadsLoaded, xgLoaded, injuriesLoaded, fatigueLoaded, transfersLoaded, h2hLoaded };
   } catch (e) {
-    return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false };
+    return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false, h2hLoaded:false };
   }
 }
 
@@ -690,6 +698,7 @@ function switchLeagueData(leagueKey) {
   TEAM_INJURIES = {};
   TEAM_FATIGUE = {};
   TRANSFERS = {};
+  H2H = {};
 }
 
 // ============================================================ 예측 엔진 v2 (EPL 앱에서 검증된 순수 함수 이식)
@@ -814,6 +823,39 @@ const LEAGUE_LAMBDA = {
 // computeLambdas: Elo+리그평균+xG블렌딩+라이벌보정으로 홈/원정 득점 기댓값(λ)을 계산.
 // predictMatchV2(개별 경기 예측)와 simulateSeason(시즌 전체 시뮬레이션)이 동일 로직을 공유—
 // 두 군데서 따로 구현하면 나중에 한쪽만 고치고 다른 쪽을 안 고치는 실수가 생기기 쉬워서 분리함.
+// ML 앙상블 (2026-07-16 착수) — train_ml_ensemble.py가 EPL+6개 리그 통합으로
+// 학습한 로지스틱 회귀 계수를 그대로 JS에서 재현한다(다항 로지스틱=소프트맥스).
+// window.PIPELINE_ML_ENSEMBLE이 없으면(학습 표본 부족으로 스킵됐거나 아직
+// 파이프라인 미실행) null을 반환 — predictMatchV2가 이 경우 ML 블렌딩을
+// 건너뛰고 기존 Elo+몬테카를로 예측만 쓴다(항상 안전한 폴백).
+function mlXgFeature(homeName, awayName) {
+  const h = TEAM_XG[homeName], a = TEAM_XG[awayName];
+  if (h && a && Number.isFinite(h.xG) && Number.isFinite(h.xGA) &&
+      Number.isFinite(a.xG) && Number.isFinite(a.xGA)) {
+    return { xgDiff: (h.xG - a.xGA) - (a.xG - h.xGA), hasXg: 1 };
+  }
+  return { xgDiff: 0, hasXg: 0 };
+}
+
+function mlEnsembleProbs(eloDiff, xgDiff, hasXg) {
+  const m = (typeof window !== "undefined") ? window.PIPELINE_ML_ENSEMBLE : null;
+  if (!m || !Array.isArray(m.coef) || !Array.isArray(m.intercept) || !Array.isArray(m.classes)) return null;
+  const feats = [eloDiff, xgDiff, hasXg];
+  const scores = m.classes.map((_, ci) => {
+    const row = m.coef[ci] || [];
+    let s = m.intercept[ci] || 0;
+    for (let i = 0; i < feats.length; i++) s += (row[i] || 0) * feats[i];
+    return s;
+  });
+  const maxS = Math.max(...scores);
+  const exps = scores.map(s => Math.exp(s - maxS));
+  const sumExp = exps.reduce((a, b) => a + b, 0) || 1;
+  const probs = exps.map(e => e / sumExp);
+  const out = { H: 0, D: 0, A: 0 };
+  m.classes.forEach((c, i) => { out[c] = probs[i]; });
+  return out;
+}
+
 function computeLambdas(leagueKey, homeName, awayName) {
   const homeElo = (ELO[homeName] ?? 1500) + HOME_ADV;
   const awayElo = (ELO[awayName] ?? 1500);
@@ -900,6 +942,23 @@ function predictMatchV2(leagueKey, homeName, awayName, sims = 100000) {
   const total = finalHome + finalDraw + finalAway;
   finalHome /= total; finalDraw /= total; finalAway /= total;
 
+  // ML 앙상블 블렌딩 (2026-07-16) — Elo+몬테카를로 결과에 20% 가중치로 섞는다.
+  // xG 블렌딩(30%)보다 가중치를 낮게 잡은 이유: xG는 실제 슈팅 데이터 기반인
+  // 반면 ML은 아직 학습 표본이 적을 26-27 시즌 초반 데이터로 만들어졌을
+  // 가능성이 높아 과신하지 않는 게 안전하다.
+  const { xgDiff: mlXgDiff, hasXg: mlHasXg } = mlXgFeature(homeName, awayName);
+  const mlProbs = mlEnsembleProbs(eloDiff, mlXgDiff, mlHasXg);
+  let mlApplied = false;
+  if (mlProbs) {
+    const ML_WEIGHT = 0.2;
+    finalHome = finalHome * (1 - ML_WEIGHT) + mlProbs.H * ML_WEIGHT;
+    finalDraw = finalDraw * (1 - ML_WEIGHT) + mlProbs.D * ML_WEIGHT;
+    finalAway = finalAway * (1 - ML_WEIGHT) + mlProbs.A * ML_WEIGHT;
+    const total2 = finalHome + finalDraw + finalAway;
+    finalHome /= total2; finalDraw /= total2; finalAway /= total2;
+    mlApplied = true;
+  }
+
   const topScores = Object.entries(scoreCounts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
@@ -915,6 +974,7 @@ function predictMatchV2(leagueKey, homeName, awayName, sims = 100000) {
     rivalry,    // true면 더비/라이벌 매치 보정이 적용된 예측
     injuryApplied,  // true면 부상자 데이터가 반영된 예측 (데이터 도착 전엔 항상 false)
     fatigueApplied, // true면 월드컵 여독 데이터가 반영된 예측 (데이터 도착 전엔 항상 false)
+    mlApplied,      // true면 ML 앙상블이 반영된 예측 (학습 표본 부족 시 항상 false)
     topScores,
     overUnder: computeOverUnder(scoreCounts, safeSims),
     marketStats: computeMarketStats(scoreCounts, safeSims),
@@ -1516,6 +1576,86 @@ function ShareResultPanel({leagueKey, home, away, result}) {
   );
 }
 
+// getH2H/H2HCard: EPL 앱(index.html)의 getH2H/H2HCard를 이식. 이 앱엔 EPL의
+// _liveResults(사용자가 직접 추적하는 실시간 결과) 개념이 없어서 그 부분은
+// 빼고, 파이프라인 H2H(matches 테이블 기반, app_export_multileague.py
+// build_h2h())만 쓴다 — 6개 리그 다 같은 구조라 그대로 재사용 가능.
+function getH2H(teamA, teamB) {
+  const key = [teamA, teamB].sort().join("|||");
+  const raw = H2H[key] || [];
+  const games = raw.map(g => ({ home: g.home, away: g.away, hg: g.homeGoals, ag: g.awayGoals, date: g.date || "" }))
+    .sort((x, y) => (x.date < y.date ? 1 : -1)); // 최신순
+  let aWin = 0, draw = 0, bWin = 0, aGF = 0, aGA = 0;
+  for (const g of games) {
+    const aIsHome = g.home === teamA;
+    const aScore = aIsHome ? g.hg : g.ag;
+    const bScore = aIsHome ? g.ag : g.hg;
+    aGF += aScore; aGA += bScore;
+    if (aScore > bScore) aWin++;
+    else if (aScore < bScore) bWin++;
+    else draw++;
+  }
+  return { games, aWin, draw, bWin, aGF, aGA, total: games.length };
+}
+
+function H2HCard({ teamA, teamB }) {
+  const h = React.useMemo(() => getH2H(teamA, teamB), [teamA, teamB]);
+  if (!h.total) {
+    return (
+      <Card>
+        <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:6}}>🤝 상대전적 (H2H)</div>
+        <div style={{fontSize:12.5, color:T.muted, textAlign:"center", padding:"6px 0"}}>
+          아직 {teamA} vs {teamB} 경기 결과가 파이프라인에 없습니다.
+        </div>
+      </Card>
+    );
+  }
+  const barA = Math.round(h.aWin / h.total * 100);
+  const barD = Math.round(h.draw / h.total * 100);
+  const barB = 100 - barA - barD;
+  return (
+    <Card>
+      <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:2}}>🤝 상대전적 (H2H)</div>
+      <div style={{fontSize:11, color:T.muted, marginBottom:8}}>최근 {h.total}경기 기준</div>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:4}}>
+        <div style={{textAlign:"center", flex:1}}>
+          <div style={{fontSize:11, color:T.muted}}>{teamA}</div>
+          <div style={{fontSize:22, fontWeight:900, color:T.accent}}>{h.aWin}</div>
+          <div style={{fontSize:10, color:T.dim}}>승</div>
+        </div>
+        <div style={{textAlign:"center", flex:0.7}}>
+          <div style={{fontSize:11, color:T.muted}}>무</div>
+          <div style={{fontSize:20, fontWeight:800, color:T.muted}}>{h.draw}</div>
+          <div style={{fontSize:10, color:T.dim, marginTop:6}}>득실</div>
+          <div style={{fontSize:12, color:T.text, fontFamily:"monospace"}}>{h.aGF} : {h.aGA}</div>
+        </div>
+        <div style={{textAlign:"center", flex:1}}>
+          <div style={{fontSize:11, color:T.muted}}>{teamB}</div>
+          <div style={{fontSize:22, fontWeight:900, color:T.gold}}>{h.bWin}</div>
+          <div style={{fontSize:10, color:T.dim}}>승</div>
+        </div>
+      </div>
+      <div style={{display:"flex", height:8, borderRadius:4, overflow:"hidden", marginTop:10, background:T.surface}}>
+        <div style={{width:`${barA}%`, background:T.accent}}/>
+        <div style={{width:`${barD}%`, background:T.dim}}/>
+        <div style={{width:`${barB}%`, background:T.gold}}/>
+      </div>
+      <div style={{marginTop:12, borderTop:`1px solid ${T.border}`, paddingTop:8}}>
+        <div style={{fontSize:11, color:T.muted, marginBottom:6}}>최근 맞대결</div>
+        {h.games.slice(0,5).map((g,i) => (
+          <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between",
+            padding:"5px 0", borderTop: i>0?`1px solid ${T.border}`:"none", fontSize:12.5}}>
+            <span style={{color:T.dim, fontSize:10.5, width:74}}>{g.date || "-"}</span>
+            <span style={{flex:1, textAlign:"right"}}>{g.home}</span>
+            <span style={{margin:"0 8px", fontFamily:"monospace", fontWeight:800, color:T.text}}>{g.hg}:{g.ag}</span>
+            <span style={{flex:1}}>{g.away}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function PredictTab({ leagueKey }) {
   const teams = LEAGUES[leagueKey].teams;
   const [home, setHome] = useState(teams[0]);
@@ -1613,6 +1753,12 @@ function PredictTab({ leagueKey }) {
                 ✈️ 월드컵 여독 반영됨
               </div>
             )}
+            {result.mlApplied && (
+              <div style={{display:"inline-block", background:"rgba(156,39,176,0.12)", border:`1px solid ${T.purple}`,
+                borderRadius:20, padding:"3px 10px", fontSize:11, color:T.purple, fontWeight:700, marginBottom:8}}>
+                🤖 ML 앙상블 반영됨
+              </div>
+            )}
             <Bar label={`${home} 승`} value={result.homeWinProb} color={T.accent}/>
             <Bar label="무승부" value={result.drawProb} color={T.gold}/>
             <Bar label={`${away} 승`} value={result.awayWinProb} color={T.red}/>
@@ -1623,6 +1769,8 @@ function PredictTab({ leagueKey }) {
           <PredictionExplainCard home={home} away={away} result={result}/>
 
           <LiveInPlayPanel home={home} away={away} lambdaHome={result.lambdaHome} lambdaAway={result.lambdaAway}/>
+
+          {home !== away && <H2HCard teamA={home} teamB={away}/>}
 
           <Card>
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>예상 스코어 Top 5</div>
@@ -2431,10 +2579,17 @@ function SquadTab({ leagueKey }) {
 
   useEffect(() => { setTeam(teams[0]); }, [leagueKey]);
 
-  const players = SQUADS[team];
+  const squad = SQUADS[team];
   const xg = TEAM_XG[team];
   const xgValid = xg && Number.isFinite(xg.xG) && Number.isFinite(xg.xGA);
   const elo = ELO[team];
+
+  const POS_LABELS = [
+    { key: "gk", label: "GK", color: T.amber || T.cyan },
+    { key: "df", label: "DF", color: T.cyan },
+    { key: "mf", label: "MF", color: T.green },
+    { key: "fw", label: "FW", color: T.red },
+  ];
 
   return (
     <div>
@@ -2446,7 +2601,7 @@ function SquadTab({ leagueKey }) {
         </select>
       </Card>
 
-      {!players ? (
+      {!squad ? (
         <Card>
           <div style={{textAlign:"center", padding:"20px 8px"}}>
             <div style={{fontSize:28, marginBottom:8}}>👥</div>
@@ -2468,7 +2623,9 @@ function SquadTab({ leagueKey }) {
                 <TeamCrest name={team} size={38}/>
                 <div>
                   <div style={{fontSize:17, fontWeight:800, color:T.text}}>{team}</div>
-                  <div style={{fontSize:12, color:T.muted}}>{lg.label} · 선수 {players.length}명</div>
+                  <div style={{fontSize:12, color:T.muted}}>
+                    {lg.label} · 선수 {squad.all.length}명{squad.coach && ` · 감독 ${squad.coach}`}
+                  </div>
                 </div>
               </div>
             </div>
@@ -2521,19 +2678,44 @@ function SquadTab({ leagueKey }) {
 
           <TransfersPanel team={team}/>
 
-          <Card>
-            <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
-              ⚠️ 포지션·포메이션·선발 라인업 정보는 아직 파이프라인에 없어(선수명만 확보됨), 전체 명단만 표시합니다.
-            </div>
-            <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
-              {[...players].sort((a,b) => a.localeCompare(b)).map((p, i) => (
-                <span key={i} style={{fontSize:12.5, color:T.text, background:T.surface,
-                  border:`1px solid ${T.border}`, borderRadius:14, padding:"5px 10px"}}>
-                  {p}
-                </span>
-              ))}
-            </div>
-          </Card>
+          {squad.hasPositions ? (
+            <Card>
+              <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
+                포지션은 BSD 데이터 기준 자동 분류입니다 — 세부 표기가 애매한 선수는 MF로 잡힐 수 있습니다.
+              </div>
+              {POS_LABELS.map(({key, label, color}) => {
+                const names = squad[key] || [];
+                if (!names.length) return null;
+                return (
+                  <div key={key} style={{marginBottom:12}}>
+                    <div style={{fontSize:11.5, fontWeight:700, color, marginBottom:6}}>{label} · {names.length}명</div>
+                    <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
+                      {names.map((p, i) => (
+                        <span key={i} style={{fontSize:12.5, color:T.text, background:T.surface,
+                          border:`1px solid ${T.border}`, borderRadius:14, padding:"5px 10px"}}>
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </Card>
+          ) : (
+            <Card>
+              <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
+                ⚠️ 포지션 정보 없음(football-data.org 폴백 경로) — 전체 명단만 표시합니다.
+              </div>
+              <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
+                {squad.all.map((p, i) => (
+                  <span key={i} style={{fontSize:12.5, color:T.text, background:T.surface,
+                    border:`1px solid ${T.border}`, borderRadius:14, padding:"5px 10px"}}>
+                    {p}
+                  </span>
+                ))}
+              </div>
+            </Card>
+          )}
         </>
       )}
     </div>
