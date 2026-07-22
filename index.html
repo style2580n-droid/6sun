@@ -465,6 +465,58 @@ function fatigueLambdaAdjust(team) {
 let TEAM_XG = {};    // { 팀명: { xG, xGA } } — collect_xg_bsd.py의 teamXg 필드
                       // (24-25/25-26 시즌 평균, 26-27 신규 승격팀은 항목이 없을 수 있음 — 정상)
 
+// ── 선수 능력치 기준선 (A단계, 2026-07-22 연결) ──────────────────────────────
+// PLAYER_BASELINE: player_baseline.json(update_player_baseline()) 구조 그대로.
+//   { "이름|국가": { name_kr, club_en, league, position, per90:{scoring,creating,defending}, source, league_apps, ... } }
+// source는 두 가지: "wc2026"(월드컵 기록으로 채운 시즌 초 임시값) / "league"(실제 26-27 리그 경기로
+// 갱신된 값, league_apps>=5일 때 자동 전환 — 인수인계 7번 항목).
+//
+// ⚠️ 지금 시점(개막 전) 매칭 가능한 선수는 club_en이 채워진 314명 중 6개 리그 소속만이고
+// (팀당 평균 2명 안팎), 그마저 전부 source=wc2026(월드컵 기록)이라 팀 단위로 평균 내기엔
+// 표본이 너무 적고 왜곡 위험이 크다 — "추측 금지" 원칙에 따라 이 값들로는 예측을 흔들지 않는다.
+// 그래서 playerLambdaAdjust는 source==="league"(=실제 시즌 데이터로 갱신된 선수)만 세고,
+// 팀당 최소 표본(PLAYER_MIN_SAMPLE)을 못 채우면 항상 무효과(factor=1)를 반환한다.
+// 개막 후 몇 주 지나 league_apps>=5인 선수가 팀당 쌓이면 자동으로 활성화된다(별도 배포 불필요).
+let PLAYER_BASELINE = {};
+const PLAYER_MIN_SAMPLE = 4; // 팀당 이 명수 이상 source=league 선수가 있어야 반영 시작
+
+// teamMatchedLeaguePlayers: club_en 기준으로 이 팀 소속이면서 source=league인 선수만 추출.
+function teamMatchedLeaguePlayers(leagueKey, teamName) {
+  const clubEn = (ENGLISH_NAME[leagueKey] && ENGLISH_NAME[leagueKey][teamName]) || null;
+  if (!clubEn) return [];
+  return Object.values(PLAYER_BASELINE).filter(p =>
+    p && p.club_en === clubEn && p.source === "league" &&
+    p.per90 && Number.isFinite(p.per90.scoring) && Number.isFinite(p.per90.creating));
+}
+
+// leagueAvgPer90: 매칭된(source=league) 선수 전체 기준 리그 평균 scoring+creating per90.
+// 팀 지수를 이 평균 대비 상대값으로 계산해야 리그마다 득점 수준이 달라도 공정하게 비교된다.
+function leagueAvgPer90(leagueKey) {
+  const teams = LEAGUES[leagueKey].teams;
+  let sum = 0, n = 0;
+  teams.forEach(t => {
+    teamMatchedLeaguePlayers(leagueKey, t).forEach(p => {
+      sum += p.per90.scoring + p.per90.creating;
+      n++;
+    });
+  });
+  return n > 0 ? sum / n : null;
+}
+
+// playerLambdaAdjust: 팀별 매칭 선수의 (scoring+creating) per90 평균이 리그 평균보다 높으면
+// 공격 λ를 소폭 상향, 낮으면 소폭 하향. 표본 부족 시 항상 1(무효과) — xG/부상/피로도와 동일한
+// "안전한 폴백" 패턴. 효과는 최대 ±8%로 제한(팀 단위 ELO/xG보다 신뢰도가 낮은 보조 신호이므로).
+function playerLambdaAdjust(leagueKey, teamName) {
+  const matched = teamMatchedLeaguePlayers(leagueKey, teamName);
+  if (matched.length < PLAYER_MIN_SAMPLE) return { factor: 1, applied: false, matched: matched.length };
+  const avgLeague = leagueAvgPer90(leagueKey);
+  if (!Number.isFinite(avgLeague) || avgLeague <= 0) return { factor: 1, applied: false, matched: matched.length };
+  const teamAvg = matched.reduce((s, p) => s + p.per90.scoring + p.per90.creating, 0) / matched.length;
+  const rel = (teamAvg - avgLeague) / avgLeague; // -1 ~ +수 (통상 -0.5~+0.5권)
+  const factor = Math.max(0.92, Math.min(1.08, 1 + rel * 0.16));
+  return { factor, applied: true, matched: matched.length };
+}
+
 // TRANSFERS: EPL 앱의 TRANSFERS와 동일 구조 — { 팀명: { in:[{player,from,date}], out:[{player,to,date}] } }.
 // collect_transfers_bsd.py는 예전부터 6개 리그 이적도 감지해서 쌓아뒀는데, app_export_multileague.py
 // 출력에 안 붙어있어서 이 앱까지 못 왔었다 (2026-07-16 파이프라인 쪽에서 연결 완료).
@@ -473,13 +525,19 @@ let TRANSFERS = {};
 // H2H: EPL 앱과 동일 구조 — { "팀A|||팀B"(가나다순): [{home,away,homeGoals,awayGoals,date}, ...] }
 let H2H = {};
 
+// LEADERBOARD: 득점왕/도움왕 — { scorers: {"선수|팀": 골수}, assists: {"선수|팀": 도움수} }.
+// 2026-07-18 신규(EPL 앱의 STATIC_LEADERBOARD와 동일 개념/구조를 6개 리그로 포팅).
+// collect_goalscorers.py가 실제 26-27 시즌 종료 경기에서 뽑은 득점자만 반영하므로,
+// 8월 개막 전에는 비어있는 게 정상이다.
+let LEADERBOARD = { scorers: {}, assists: {} };
+
 async function loadPipelineData(leagueKey) {
   try {
     await fetchPipelineDataMultileague();
     const globalKey = `PIPELINE_DATA_${leagueKey.toUpperCase()}`;
     const data = (typeof window !== "undefined") ? window[globalKey] : null;
-    if (!data) return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false, h2hLoaded:false };
-    let scheduleLoaded = false, logosLoaded = false, squadsLoaded = false, xgLoaded = false, injuriesLoaded = false, fatigueLoaded = false, transfersLoaded = false, h2hLoaded = false;
+    if (!data) return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false, h2hLoaded:false, leaderboardLoaded:false, playerBaselineLoaded:false };
+    let scheduleLoaded = false, logosLoaded = false, squadsLoaded = false, xgLoaded = false, injuriesLoaded = false, fatigueLoaded = false, transfersLoaded = false, h2hLoaded = false, leaderboardLoaded = false, playerBaselineLoaded = false;
     if (Array.isArray(data.schedule) && data.schedule.length) {
       SCHEDULE = data.schedule;
       scheduleLoaded = true;
@@ -519,9 +577,25 @@ async function loadPipelineData(leagueKey) {
       H2H = data.h2h;
       h2hLoaded = true;
     }
-    return { scheduleLoaded, logosLoaded, squadsLoaded, xgLoaded, injuriesLoaded, fatigueLoaded, transfersLoaded, h2hLoaded };
+    // LEADERBOARD: { scorers:{}, assists:{} } — 2026-07-18 신규.
+    // 8월 개막 전엔 scorers/assists가 둘 다 빈 객체로 오는 게 정상이라 그 경우엔
+    // loaded를 true로 안 올린다(=화면에 "데이터 없음" 안내가 뜨게 둠).
+    if (data.leaderboard && typeof data.leaderboard === "object" &&
+        ((data.leaderboard.scorers && Object.keys(data.leaderboard.scorers).length) ||
+         (data.leaderboard.assists && Object.keys(data.leaderboard.assists).length))) {
+      LEADERBOARD = data.leaderboard;
+      leaderboardLoaded = true;
+    }
+    // 선수 능력치 기준선(A단계, 2026-07-22): { "이름|국가": {club_en, position, per90, source, ...} }
+    // update_player_baseline()이 출력하는 player_baseline.json의 players 필드를 그대로 받는다.
+    // 비어있거나 필드가 없으면(파이프라인이 아직 안 붙였으면) 조용히 무효과로 통과.
+    if (data.playerBaseline && typeof data.playerBaseline === "object" && Object.keys(data.playerBaseline).length) {
+      PLAYER_BASELINE = data.playerBaseline;
+      playerBaselineLoaded = true;
+    }
+    return { scheduleLoaded, logosLoaded, squadsLoaded, xgLoaded, injuriesLoaded, fatigueLoaded, transfersLoaded, h2hLoaded, leaderboardLoaded, playerBaselineLoaded };
   } catch (e) {
-    return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false, h2hLoaded:false };
+    return { scheduleLoaded:false, logosLoaded:false, squadsLoaded:false, xgLoaded:false, injuriesLoaded:false, fatigueLoaded:false, transfersLoaded:false, h2hLoaded:false, leaderboardLoaded:false, playerBaselineLoaded:false };
   }
 }
 
@@ -699,6 +773,8 @@ function switchLeagueData(leagueKey) {
   TEAM_FATIGUE = {};
   TRANSFERS = {};
   H2H = {};
+  LEADERBOARD = { scorers: {}, assists: {} };
+  PLAYER_BASELINE = {};
 }
 
 // ============================================================ 예측 엔진 v2 (EPL 앱에서 검증된 순수 함수 이식)
@@ -898,9 +974,17 @@ function computeLambdas(leagueKey, homeName, awayName) {
   lambdaHome = Math.max(0.15, lambdaHome * fatigueLambdaAdjust(homeName));
   lambdaAway = Math.max(0.15, lambdaAway * fatigueLambdaAdjust(awayName));
 
+  // 선수 능력치 기준선 보정 (A단계) — 팀당 source=league 매칭 선수가 PLAYER_MIN_SAMPLE
+  // 미만이면 항상 factor=1(무효과). 개막 초반엔 거의 항상 이 상태가 정상이다.
+  const homePlayer = playerLambdaAdjust(leagueKey, homeName);
+  const awayPlayer = playerLambdaAdjust(leagueKey, awayName);
+  lambdaHome = Math.max(0.15, lambdaHome * homePlayer.factor);
+  lambdaAway = Math.max(0.15, lambdaAway * awayPlayer.factor);
+
   return { lambdaHome, lambdaAway, eloDiff, xgBlended, rivalry,
     injuryApplied: inj.homeFactor < 1 || inj.awayFactor < 1,
-    fatigueApplied: (TEAM_FATIGUE[homeName]?.fatigueScore > 0) || (TEAM_FATIGUE[awayName]?.fatigueScore > 0) };
+    fatigueApplied: (TEAM_FATIGUE[homeName]?.fatigueScore > 0) || (TEAM_FATIGUE[awayName]?.fatigueScore > 0),
+    playerBaselineApplied: homePlayer.applied || awayPlayer.applied };
 }
 
 
@@ -915,7 +999,7 @@ function predictMatchV2(leagueKey, homeName, awayName, sims = 100000) {
   let awayWinProb = (1 - winProbRaw) * (1 - drawProbRaw);
   let drawProb = drawProbRaw;
 
-  const { lambdaHome, lambdaAway, xgBlended, rivalry, injuryApplied, fatigueApplied } = computeLambdas(leagueKey, homeName, awayName);
+  const { lambdaHome, lambdaAway, xgBlended, rivalry, injuryApplied, fatigueApplied, playerBaselineApplied } = computeLambdas(leagueKey, homeName, awayName);
 
   // 더비/라이벌 매치: 전력차 완화 + 무승부 확률 상승(EPL 앱과 동일 공식, λ 수렴은 computeLambdas에서 이미 처리됨)
   if (rivalry) {
@@ -974,6 +1058,7 @@ function predictMatchV2(leagueKey, homeName, awayName, sims = 100000) {
     rivalry,    // true면 더비/라이벌 매치 보정이 적용된 예측
     injuryApplied,  // true면 부상자 데이터가 반영된 예측 (데이터 도착 전엔 항상 false)
     fatigueApplied, // true면 월드컵 여독 데이터가 반영된 예측 (데이터 도착 전엔 항상 false)
+    playerBaselineApplied, // true면 선수 능력치 기준선(A단계)이 반영된 예측 (개막 후 팀당 표본이 쌓이기 전엔 항상 false)
     mlApplied,      // true면 ML 앙상블이 반영된 예측 (학습 표본 부족 시 항상 false)
     topScores,
     overUnder: computeOverUnder(scoreCounts, safeSims),
@@ -1271,6 +1356,9 @@ function PredictionExplainCard({home, away, result}) {
   }
   if (result.fatigueApplied) {
     items.push({icon:"✈️", text:"월드컵 등 국가대표 소집 여독이 반영됐습니다."});
+  }
+  if (result.playerBaselineApplied) {
+    items.push({icon:"🧬", text:"실제 26-27시즌 기록으로 갱신된 선수 능력치 기준선이 소폭(±8% 이내) 반영됐습니다."});
   }
   const lambdaDiff = (result.lambdaHome||0) - (result.lambdaAway||0);
   if (Math.abs(lambdaDiff) > 0.3) {
@@ -2572,6 +2660,95 @@ function TransfersPanel({ team }) {
   );
 }
 
+// LeaderboardTab: EPL 앱의 "⚽ 시즌 기록" 탭에서 실제로 작동하는 부분(득점왕/
+// 도움왕)만 6개 리그로 포팅한 것. EPL 쪽엔 GK 선방·카드 등 자리도 있지만
+// 실제로는 빈 값이라(2026-07-18 확인) 여기선 아예 안 만들었다 — 없는 자리를
+// 만들어봤자 "데이터 없음"만 반복해서 보여주는 셈이라 사용자 입장에서 의미 없음.
+function LeaderboardTab({ leagueKey }) {
+  const lg = LEAGUES[leagueKey];
+  const [metric, setMetric] = useState("scorers"); // scorers | assists
+
+  const rows = useMemo(() => {
+    const src = LEADERBOARD[metric] || {};
+    return Object.entries(src)
+      .map(([key, val]) => {
+        const idx = key.lastIndexOf("|");
+        const name = idx >= 0 ? key.slice(0, idx) : key;
+        const team = idx >= 0 ? key.slice(idx + 1) : "";
+        return { name, team, val };
+      })
+      .sort((a, b) => b.val - a.val)
+      .slice(0, 20);
+  }, [metric]);
+
+  const hasAny = Object.keys(LEADERBOARD.scorers || {}).length > 0 ||
+                 Object.keys(LEADERBOARD.assists || {}).length > 0;
+
+  if (!hasAny) {
+    return (
+      <Card>
+        <div style={{textAlign:"center", padding:"24px 8px"}}>
+          <div style={{fontSize:28, marginBottom:8}}>⚽</div>
+          <div style={{fontSize:13.5, color:T.text, fontWeight:700, marginBottom:6}}>
+            {lg.label} 득점왕/도움왕 데이터가 아직 없습니다
+          </div>
+          <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
+            2026-27 시즌이 아직 개막 전이라(8월 예정) 종료된 경기가 없습니다.
+            시즌이 시작되고 경기가 끝날 때마다 <code style={{color:T.cyan}}>collect_goalscorers.py</code>가
+            자동으로 득점자·도움 기록을 쌓으면 여기 자동으로 표시됩니다.
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <div>
+      <Card>
+        <div style={{display:"flex", gap:8}}>
+          {[{id:"scorers", label:"⚽ 득점왕"}, {id:"assists", label:"🎯 도움왕"}].map(m => (
+            <button key={m.id} onClick={() => setMetric(m.id)}
+              style={{
+                flex:1, padding:"9px 0", borderRadius:8, border:`1px solid ${T.border}`,
+                background: metric === m.id ? T.accent : T.surface,
+                color: metric === m.id ? "#fff" : T.text,
+                fontSize:13, fontWeight:700, cursor:"pointer",
+              }}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </Card>
+      <Card>
+        {rows.length === 0 ? (
+          <div style={{fontSize:12.5, color:T.muted, textAlign:"center", padding:"12px 0"}}>
+            {metric === "scorers" ? "득점" : "도움"} 기록이 아직 없습니다.
+          </div>
+        ) : (
+          <div style={{display:"flex", flexDirection:"column", gap:2}}>
+            {rows.map((r, i) => (
+              <div key={i} style={{
+                display:"flex", alignItems:"center", gap:10, padding:"9px 4px",
+                borderTop: i > 0 ? `1px solid ${T.border}` : "none",
+              }}>
+                <div style={{
+                  width:22, textAlign:"center", fontSize:12.5, fontWeight:800,
+                  color: i < 3 ? T.gold : T.dim,
+                }}>{i + 1}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13.5, color:T.text, fontWeight:700}}>{r.name}</div>
+                  {r.team && <div style={{fontSize:11, color:T.muted}}>{r.team}</div>}
+                </div>
+                <div style={{fontSize:16, fontWeight:900, color:T.accent}}>{r.val}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function SquadTab({ leagueKey }) {
   const lg = LEAGUES[leagueKey];
   const teams = lg.teams;
@@ -2730,6 +2907,7 @@ const TABS = [
   { id:"ranking", label:"레이팅" },
   { id:"schedule", label:"일정" },
   { id:"squads", label:"👥 스쿼드" },
+  { id:"leaderboard", label:"⚽ 시즌기록" },
   { id:"history", label:"📝 기록" },
   { id:"settings", label:"⚙️ 설정" },
 ];
@@ -2957,6 +3135,7 @@ function App() {
             {tab === "ranking" && <RankingTab leagueKey={leagueKey}/>}
             {tab === "schedule" && <ScheduleTab leagueKey={leagueKey}/>}
             {tab === "squads" && <SquadTab leagueKey={leagueKey}/>}
+            {tab === "leaderboard" && <LeaderboardTab leagueKey={leagueKey}/>}
             {tab === "standings" && <StandingsTab leagueKey={leagueKey}/>}
             {tab === "settings" && <SettingsTab leagueKey={leagueKey} favorites={favorites} onToggleFavorite={toggleFavorite} onDataReset={forceRefresh} notifyEnabled={notifyEnabled} onToggleNotify={toggleNotify} themeMode={themeMode} onChangeTheme={changeTheme}/>}
             {tab === "outlook" && <SeasonOutlookTab leagueKey={leagueKey}/>}
