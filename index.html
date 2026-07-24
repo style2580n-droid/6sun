@@ -247,8 +247,28 @@ const LEAGUES = {
       "버밍엄 시티","스토크 시티","스완지 시티","번리","웨스트햄 유나이티드","왓포드",
       "렉섬","카디프 시티","사우샘프턴"],
   },
+  // 2026-07-24 추가: 팀 목록은 LEAGUE_TEAM_MAPS(app_export_multileague.py)와
+  // 동일 — collect_mls_norway_teams.py 실행으로 46/46 매칭 확정된 그 목록.
+  mls: {
+    label: "MLS",
+    country: "미국·캐나다",
+    teams: ["애틀랜타 유나이티드","오스틴 FC","CF 몬트리올","샬럿 FC","시카고 파이어",
+      "콜로라도 래피즈","콜럼버스 크루","DC 유나이티드","FC 신시내티","FC 댈러스",
+      "휴스턴 다이나모","인터 마이애미","LA 갤럭시","로스앤젤레스 FC","미네소타 유나이티드",
+      "내슈빌 SC","뉴잉글랜드 레볼루션","뉴욕 시티 FC","뉴욕 레드불스","올랜도 시티",
+      "필라델피아 유니온","포틀랜드 팀버스","리얼 솔트레이크","샌디에이고 FC",
+      "산호세 어스퀘이크스","시애틀 사운더스","스포르팅 캔자스시티","세인트루이스 시티",
+      "토론토 FC","밴쿠버 화이트캡스"],
+  },
+  eliteserien: {
+    label: "엘리테세리엔",
+    country: "노르웨이",
+    teams: ["올레순","보되글림트","프레드릭스타","함캄","IK 스타트","KFUM 오슬로",
+      "크리스티안순","릴레스트룀","몰데","로젠보르그","브란","트롬쇠","발레렝가",
+      "산네피오르","사르프스보르그 08","비킹"],
+  },
 };
-const LEAGUE_ORDER = ["laliga","bundesliga","seriea","ligue1","eredivisie","championship"];
+const LEAGUE_ORDER = ["laliga","bundesliga","seriea","ligue1","eredivisie","championship","mls","eliteserien"];
 
 // ============================================================ 전역 슬롯 (리그 전환 시 통째로 교체)
 let ELO = seedElo(LEAGUES.laliga.teams);
@@ -688,6 +708,27 @@ const ENGLISH_NAME = {
     "웨스트햄 유나이티드":"West Ham United","왓포드":"Watford","렉섬":"Wrexham","카디프 시티":"Cardiff City",
     "사우샘프턴":"Southampton",
   },
+  mls: {
+    "애틀랜타 유나이티드":"Atlanta United","오스틴 FC":"Austin FC","CF 몬트리올":"CF Montreal",
+    "샬럿 FC":"Charlotte FC","시카고 파이어":"Chicago Fire","콜로라도 래피즈":"Colorado Rapids",
+    "콜럼버스 크루":"Columbus Crew","DC 유나이티드":"DC United","FC 신시내티":"FC Cincinnati",
+    "FC 댈러스":"FC Dallas","휴스턴 다이나모":"Houston Dynamo","인터 마이애미":"Inter Miami",
+    "LA 갤럭시":"LA Galaxy","로스앤젤레스 FC":"Los Angeles FC","미네소타 유나이티드":"Minnesota United",
+    "내슈빌 SC":"Nashville SC","뉴잉글랜드 레볼루션":"New England Revolution",
+    "뉴욕 시티 FC":"New York City FC","뉴욕 레드불스":"New York Red Bulls","올랜도 시티":"Orlando City",
+    "필라델피아 유니온":"Philadelphia Union","포틀랜드 팀버스":"Portland Timbers",
+    "리얼 솔트레이크":"Real Salt Lake","샌디에이고 FC":"San Diego FC",
+    "산호세 어스퀘이크스":"San Jose Earthquakes","시애틀 사운더스":"Seattle Sounders",
+    "스포르팅 캔자스시티":"Sporting Kansas City","세인트루이스 시티":"St Louis City",
+    "토론토 FC":"Toronto FC","밴쿠버 화이트캡스":"Vancouver Whitecaps",
+  },
+  eliteserien: {
+    "올레순":"Aalesund","보되글림트":"Bodo/Glimt","프레드릭스타":"Fredrikstad",
+    "함캄":"HamKam","IK 스타트":"Start","KFUM 오슬로":"KFUM Oslo",
+    "크리스티안순":"Kristiansund","릴레스트룀":"Lillestrom","몰데":"Molde",
+    "로젠보르그":"Rosenborg","브란":"Brann","트롬쇠":"Tromso","발레렝가":"Valerenga",
+    "산네피오르":"Sandefjord","사르프스보르그 08":"Sarpsborg 08","비킹":"Viking",
+  },
 };
 
 function normTeamStr(s) {
@@ -894,6 +935,9 @@ const LEAGUE_LAMBDA = {
   ligue1:       { home: 1.61, away: 1.23 }, // 추정 (총 2.83골/경기, sportstats365)
   eredivisie:   { home: 1.80, away: 1.38 }, // 추정 (총 3.18골/경기, sportstats365)
   championship: { home: 1.48, away: 1.13 }, // 추정 (총 2.61골/경기, sportstats365)
+  // 2026-07-24 추가: 실측 footystats.org (2026 시즌 진행 중 데이터 기준)
+  mls:          { home: 1.91, away: 1.38 },
+  eliteserien:  { home: 1.85, away: 1.13 },
 };
 
 // computeLambdas: Elo+리그평균+xG블렌딩+라이벌보정으로 홈/원정 득점 기댓값(λ)을 계산.
@@ -1071,6 +1115,10 @@ function predictMatchV2(leagueKey, homeName, awayName, sims = 100000) {
 // 있어서 정확한 승강 규정과 100% 일치하진 않음. "하위권 위험도" 참고용으로만 표시)
 const RELEGATION_ZONE = {
   laliga: 3, bundesliga: 2, seriea: 3, ligue1: 2, eredivisie: 2, championship: 3,
+  // 2026-07-24 추가: MLS는 강등제 자체가 없음(컨퍼런스+플레이오프 구조) → 0으로
+  // 명시(없으면 ?? 3 기본값이 적용돼 잘못된 강등권을 계산하게 됨). 엘리테세리엔은
+  // 실측(위키피디아 2026 시즌 문서) 2팀 강등.
+  mls: 0, eliteserien: 2,
 };
 
 // simulateSeason: 실제 SCHEDULE(전체 시즌 일정)을 몬테카를로로 N번 통째로 돌려서
@@ -2016,6 +2064,7 @@ function SeasonOutlookTab({ leagueKey }) {
             ))}
           </Card>
 
+          {result.zoneSize > 0 && (
           <Card>
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>
               ⚠️ 강등권 확률 (하위 {result.zoneSize}팀 기준)
@@ -2032,9 +2081,14 @@ function SeasonOutlookTab({ leagueKey }) {
               </div>
             ))}
           </Card>
+          )}
 
           <div style={{fontSize:10.5, color:T.dim, marginBottom:8, lineHeight:1.5, padding:"0 4px"}}>
-            ⚠️ 강등권 기준은 리그마다 플레이오프 등 실제 규정과 100% 일치하지 않는 근사치(하위 {result.zoneSize}팀)입니다.
+            {result.zoneSize > 0 ? (
+              <>⚠️ 강등권 기준은 리그마다 플레이오프 등 실제 규정과 100% 일치하지 않는 근사치(하위 {result.zoneSize}팀)입니다.</>
+            ) : (
+              <>⚠️ 이 리그는 강등이 없어 강등권 확률을 표시하지 않습니다(플레이오프 진출 확률은 별도 지표 미구현).</>
+            )}
             {result.validFixtures !== result.totalFixtures && ` 일정 ${result.totalFixtures}경기 중 ${result.validFixtures}경기만 팀명이 확인되어 반영됐습니다.`}
           </div>
         </React.Fragment>
