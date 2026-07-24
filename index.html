@@ -1126,24 +1126,45 @@ const RELEGATION_ZONE = {
 // (computeLambdas)을 공유하기 때문에 결과가 서로 어긋나지 않는다.
 // SCHEDULE에 없는 팀명이 fixture에 섞여 있으면(파이프라인 데이터 오류 대비) 그 경기는
 // 조용히 건너뛴다 — 시즌 시뮬레이션 전체가 깨지는 것보다 안전.
+// 2026-07-24 수정: fixture에 homeGoals/awayGoals(실제 치른 경기, computeStandingsTable과
+// 동일 판별 기준)가 있으면 그 실제 스코어를 그대로 승점에 반영하고, 시뮬레이션 대상에서는
+// 뺀다 — 이미 끝난 경기까지 매번 새로 무작위 재시뮬레이션하던 걸 고침(6개 리그는 전부
+// 개막 전이라 여태 이 경로가 한 번도 안 타서 안 드러났었음).
 function simulateSeason(leagueKey, sims = 500) {
   const teams = LEAGUES[leagueKey].teams;
   if (!SCHEDULE.length) return null;
+
+  // 실제 결과(치른 경기)와 남은 경기를 미리 한 번만 분리 — 시뮬레이션마다 다시 안 나눔.
+  const basePoints = {}, baseGf = {}, baseGa = {};
+  teams.forEach(t => { basePoints[t] = 0; baseGf[t] = 0; baseGa[t] = 0; });
+  const remainingFixtures = [];
+  let playedCount = 0, validFixtures = 0;
+  for (const fixture of SCHEDULE) {
+    const { home, away, homeGoals, awayGoals } = fixture || {};
+    if (!basePoints.hasOwnProperty(home) || !basePoints.hasOwnProperty(away)) continue;
+    validFixtures++; // 팀명 둘 다 확인된 경기(치른 경기+남은 경기 합계) — 기존 의미 유지
+    if (Number.isFinite(homeGoals) && Number.isFinite(awayGoals)) {
+      playedCount++;
+      baseGf[home] += homeGoals; baseGa[home] += awayGoals;
+      baseGf[away] += awayGoals; baseGa[away] += homeGoals;
+      if (homeGoals > awayGoals) basePoints[home] += 3;
+      else if (homeGoals < awayGoals) basePoints[away] += 3;
+      else { basePoints[home] += 1; basePoints[away] += 1; }
+    } else {
+      remainingFixtures.push({ home, away });
+    }
+  }
 
   const titleCount = {}, relegationCount = {};
   teams.forEach(t => { titleCount[t] = 0; relegationCount[t] = 0; });
   const zoneSize = RELEGATION_ZONE[leagueKey] ?? 3;
   const safeSims = Number.isFinite(sims) && sims > 0 ? Math.floor(sims) : 500;
-  let validFixtures = 0;
 
   for (let s = 0; s < safeSims; s++) {
-    const points = {}, gf = {}, ga = {};
-    teams.forEach(t => { points[t] = 0; gf[t] = 0; ga[t] = 0; });
+    const points = { ...basePoints }, gf = { ...baseGf }, ga = { ...baseGa };
 
-    for (const fixture of SCHEDULE) {
-      const { home, away } = fixture || {};
-      if (!points.hasOwnProperty(home) || !points.hasOwnProperty(away)) continue;
-      if (s === 0) validFixtures++;
+    for (const fixture of remainingFixtures) {
+      const { home, away } = fixture;
       const { lambdaHome, lambdaAway } = computeLambdas(leagueKey, home, away);
       const hg = poissonRandom(lambdaHome), ag = poissonRandom(lambdaAway);
       gf[home] += hg; ga[home] += ag; gf[away] += ag; ga[away] += hg;
@@ -1162,6 +1183,7 @@ function simulateSeason(leagueKey, sims = 500) {
 
   return {
     zoneSize,
+    playedCount,
     validFixtures,
     totalFixtures: SCHEDULE.length,
     table: teams.map(t => ({
