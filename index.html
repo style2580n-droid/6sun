@@ -1941,7 +1941,7 @@ function H2HCard({ teamA, teamB }) {
   );
 }
 
-function PredictTab({ leagueKey }) {
+function PredictTab({ leagueKey, pendingMatch }) {
   const teams = LEAGUES[leagueKey].teams;
   const [home, setHome] = useState(teams[0]);
   const [away, setAway] = useState(teams[1]);
@@ -1954,6 +1954,14 @@ function PredictTab({ leagueKey }) {
     setHome(teams[0]); setAway(teams[1]); setResult(null); setSaved(false);
     setMarketFairProbs(null);
   }, [leagueKey]);
+
+  // 2026-07-25 추가: 일정탭 "▶"로 넘어온 경기가 있으면 팀 자동 세팅 (EPL 앱 onSelectMatch와 동일 UX).
+  // ts를 deps에 둬서 같은 매치업을 연달아 눌러도(예: 결과 본 뒤 뒤로가서 같은 경기 다시 클릭) 매번 반영됨.
+  useEffect(() => {
+    if (!pendingMatch) return;
+    if (!teams.includes(pendingMatch.home) || !teams.includes(pendingMatch.away)) return; // 리그 안 맞는 경기면 무시(방어)
+    setHome(pendingMatch.home); setAway(pendingMatch.away); setResult(null); setSaved(false);
+  }, [pendingMatch, pendingMatch?.ts]);
 
   const run = useCallback(() => {
     if (home === away) return;
@@ -2536,7 +2544,7 @@ function downloadICS(filename, content) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-function ScheduleTab({ leagueKey }) {
+function ScheduleTab({ leagueKey, onSelectMatch }) {
   const lg = LEAGUES[leagueKey];
   if (!SCHEDULE.length) {
     return (
@@ -2586,6 +2594,12 @@ function ScheduleTab({ leagueKey }) {
                 <span style={{color:T.text, fontSize:12.5, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.away}</span>
                 <TeamCrest name={g.away} size={22}/>
               </div>
+              {onSelectMatch && (
+                <button onClick={() => onSelectMatch(g.home, g.away)}
+                  title="이 매치업으로 예측 보기"
+                  style={{marginLeft:6, flexShrink:0, padding:"5px 10px", borderRadius:7, border:"none",
+                    background:T.accent, color:"#fff", fontSize:12, fontWeight:800, cursor:"pointer"}}>▶</button>
+              )}
             </div>
           ))}
         </Card>
@@ -3383,6 +3397,10 @@ function App() {
   const [leagueKey, setLeagueKey] = useState("laliga");
   const [leagueVersion, setLeagueVersion] = useState(0);
   const [tab, setTab] = useState("predict");
+  // pendingMatch: 일정탭에서 "▶" 눌러서 예측탭으로 넘길 때 쓰는 임시 상태.
+  // EPL 앱의 onSelectMatch와 동일 패턴 — 8개리그 앱엔 이게 없어서 사용자가 예측탭에서
+  // 매번 드롭다운으로 직접 팀을 골라야 했음(2026-07-25 확인, 추가).
+  const [pendingMatch, setPendingMatch] = useState(null);
   const [ready, setReady] = useState(false);
   const [pipelineStatus, setPipelineStatus] = useState(null); // null=확인중, true=연결됨, false=미연결
   const [favorites, setFavorites] = useState([]); // 현재 리그의 즐겨찾기 팀 목록
@@ -3577,6 +3595,11 @@ function App() {
 
   const forceRefresh = useCallback(() => setLeagueVersion(v => v + 1), []);
 
+  const onSelectMatch = useCallback((h, a) => {
+    setPendingMatch({ home: h, away: a, ts: Date.now() }); // ts로 같은 경기 재선택도 감지되게
+    setTab("predict");
+  }, []);
+
   return (
     <div style={{maxWidth:520, margin:"0 auto", minHeight:"100vh", paddingBottom:30}}>
       <div style={{padding:"18px 14px 10px", textAlign:"center"}}>
@@ -3605,10 +3628,10 @@ function App() {
           <Card><div style={{textAlign:"center", color:T.muted, fontSize:13}}>불러오는 중...</div></Card>
         ) : (
           <React.Fragment key={leagueVersion}>
-            {tab === "predict" && <PredictTab leagueKey={leagueKey}/>}
+            {tab === "predict" && <PredictTab leagueKey={leagueKey} pendingMatch={pendingMatch}/>}
             {tab === "teams" && <TeamListTab leagueKey={leagueKey} favorites={favorites} onToggleFavorite={toggleFavorite}/>}
             {tab === "ranking" && <RankingTab leagueKey={leagueKey}/>}
-            {tab === "schedule" && <ScheduleTab leagueKey={leagueKey}/>}
+            {tab === "schedule" && <ScheduleTab leagueKey={leagueKey} onSelectMatch={onSelectMatch}/>}
             {tab === "squads" && <SquadTab leagueKey={leagueKey}/>}
             {tab === "leaderboard" && <LeaderboardTab leagueKey={leagueKey}/>}
             {tab === "standings" && <StandingsTab leagueKey={leagueKey}/>}
