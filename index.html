@@ -1294,7 +1294,11 @@ function RadarChart({ axes, series, size = 220 }) {
 function TeamStyleRadarCard({ leagueKey, home, away }) {
   const hp = getTeamRadarProfile(leagueKey, home);
   const ap = getTeamRadarProfile(leagueKey, away);
-  const hasXg = Object.keys(TEAM_XG).length > 0;
+  // 2026-07-25 수정: TEAM_XG는 8개 리그 전체가 같이 쓰는 전역 객체라, 이전엔
+  // "전체 중 하나라도 있으면 true"였음 — 엘리테세리엔(xG 0팀)인데도 다른
+  // 리그에 xG가 있다는 이유로 경고가 안 뜨던 버그. 이 리그 소속 팀 기준으로
+  // 다시 체크한다.
+  const hasXg = LEAGUES[leagueKey].teams.some(t => TEAM_XG[t] && Number.isFinite(TEAM_XG[t].xG));
   return (
     <Card>
       <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>🕸️ 팀 스타일 비교</div>
@@ -2562,6 +2566,103 @@ function ModelVsMarketPanel({history}) {
   );
 }
 
+// ============================================================ 자동 기록 (2026-07-25 추가)
+// 예측을 미리 저장해야만 보이던 기존 HistoryTab과 달리, 파이프라인이 이미
+// 갖고 있는 종료경기(SCHEDULE의 homeGoals/awayGoals)를 그냥 그대로 보여준다.
+// MLS/엘리테세리엔처럼 이미 시즌이 진행 중인 리그는 저장 없이도 바로 여기서
+// 확인 가능 — "저장했어야만 기록이 남는" 기존 흐름의 진입장벽을 없앤다.
+// ⚠️ 정직하게: 이건 경기 전에 미리 건 예측이 아니라 지금 시점 모델로
+// 사후 계산한 것이다(그 사이 ELO/xG가 그 경기 결과 자체를 이미 반영했을 수
+// 있음) — 순수한 블라인드 사전예측 검증은 아니라서 그렇게 표기해뒀다.
+function AutoResultRow({ leagueKey, game }) {
+  const pred = React.useMemo(() => {
+    try { return predictMatchV2(leagueKey, game.home, game.away, 3000); }
+    catch (e) { return null; }
+  }, [leagueKey, game.home, game.away]);
+
+  if (!pred || !Number.isFinite(game.homeGoals) || !Number.isFinite(game.awayGoals)) return null;
+
+  const predDir = pred.homeWinProb > pred.awayWinProb
+    ? (pred.homeWinProb > pred.drawProb ? "home" : "draw")
+    : (pred.awayWinProb > pred.drawProb ? "away" : "draw");
+  const actualDir = game.homeGoals > game.awayGoals ? "home" : game.homeGoals < game.awayGoals ? "away" : "draw";
+  const topScore = pred.topScores[0]?.score;
+  const exactHit = topScore === `${game.homeGoals}-${game.awayGoals}`;
+  const dirHit = predDir === actualDir;
+  const badge = exactHit ? { label: "✅ 스코어 적중", color: T.green }
+    : dirHit ? { label: "🔵 방향 적중", color: T.cyan }
+    : { label: "❌ 미적중", color: T.red };
+
+  return (
+    <div style={{ padding: "8px 0", borderTop: `1px solid ${T.border}`, fontSize: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ color: T.dim, fontSize: 10 }}>{game.date || "-"}</span>
+        <span style={{ color: badge.color, fontWeight: 700, fontSize: 11 }}>{badge.label}</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 3 }}>
+        <span style={{ flex: 1, display: "flex", alignItems: "center", gap: 4 }}>
+          <TeamCrest name={game.home} size={16} />{game.home}
+        </span>
+        <span style={{ fontFamily: "monospace", fontWeight: 800, color: T.text, margin: "0 8px" }}>
+          {game.homeGoals}:{game.awayGoals}
+        </span>
+        <span style={{ flex: 1, textAlign: "right", display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+          {game.away}<TeamCrest name={game.away} size={16} />
+        </span>
+      </div>
+      <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>
+        모델(사후계산): {game.home} {(pred.homeWinProb * 100).toFixed(0)}% · 무 {(pred.drawProb * 100).toFixed(0)}% · {game.away} {(pred.awayWinProb * 100).toFixed(0)}%
+        {topScore ? ` · 예상 ${topScore}` : ""}
+      </div>
+    </div>
+  );
+}
+
+function AutoRecentResultsCard({ leagueKey }) {
+  const [limit, setLimit] = useState(10);
+  const finished = React.useMemo(() => {
+    return SCHEDULE
+      .filter(g => g && g.home && g.away && Number.isFinite(g.homeGoals) && Number.isFinite(g.awayGoals))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [leagueKey]);
+
+  if (!finished.length) {
+    return (
+      <Card>
+        <div style={{ fontSize: 13, fontWeight: 800, color: T.text, marginBottom: 6 }}>📡 자동 기록 (파이프라인 실측)</div>
+        <div style={{ fontSize: 12, color: T.muted, textAlign: "center", padding: "8px 0" }}>
+          아직 이 리그의 종료경기가 파이프라인에 없습니다.
+        </div>
+      </Card>
+    );
+  }
+
+  const shown = finished.slice(0, limit);
+  return (
+    <Card>
+      <div style={{ fontSize: 13, fontWeight: 800, color: T.text, marginBottom: 2 }}>
+        📡 자동 기록 (파이프라인 실측 결과, 총 {finished.length}건)
+      </div>
+      <div style={{ fontSize: 10.5, color: T.dim, marginBottom: 8, lineHeight: 1.5 }}>
+        따로 저장 안 해도 파이프라인이 잡은 종료경기가 자동으로 뜹니다.
+        ⚠️ 경기 전 미리 건 예측이 아니라 지금 모델로 사후 계산한 것이라(그
+        사이 ELO/xG가 이미 이 결과를 반영했을 수 있음) 순수 사전예측 검증은
+        아닙니다 — 참고용.
+      </div>
+      {shown.map((g, i) => (
+        <AutoResultRow key={`${g.home}_${g.away}_${g.date}_${i}`} leagueKey={leagueKey} game={g} />
+      ))}
+      {finished.length > shown.length && (
+        <button onClick={() => setLimit(l => l + 30)}
+          style={{ width: "100%", padding: "8px 0", marginTop: 6, borderRadius: 8, border: `1px solid ${T.border}`,
+                   background: "transparent", color: T.muted, fontSize: 11.5, cursor: "pointer" }}>
+          더보기 ({finished.length - shown.length}건 더)
+        </button>
+      )}
+    </Card>
+  );
+}
+
 function HistoryTab({ leagueKey }) {
   const [history, setHistory] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -2585,6 +2686,28 @@ function HistoryTab({ leagueKey }) {
     setHistory(list);
     try { await window.storage.set(storageKey, JSON.stringify(list)); } catch (e) {}
   };
+
+  // 2026-07-25 추가: 저장된 예측 중 아직 정산 안 된 것들을, 수동입력 없이
+  // 파이프라인 SCHEDULE의 실제 스코어(homeGoals/awayGoals)와 자동 대조한다.
+  // 매치 못 하면(아직 안 끝났거나 팀명 매칭 실패) 그대로 두고 기존처럼
+  // 수동입력 UI를 폴백으로 남겨둔다.
+  useEffect(() => {
+    if (!loaded || !history.length) return;
+    const unsettled = history.filter(h => !h.settled);
+    if (!unsettled.length) return;
+    let changed = false;
+    const list = history.map(entry => {
+      if (entry.settled) return entry;
+      const match = SCHEDULE.find(g => g && g.home === entry.home && g.away === entry.away
+        && Number.isFinite(g.homeGoals) && Number.isFinite(g.awayGoals));
+      if (!match) return entry;
+      changed = true;
+      return { ...entry, settled: true, actualHome: match.homeGoals, actualAway: match.awayGoals,
+        settledBy: "auto" };
+    });
+    if (changed) persist(list);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, history.length, leagueKey]);
 
   const settle = async (id) => {
     const input = settleInputs[id];
@@ -2634,6 +2757,7 @@ function HistoryTab({ leagueKey }) {
 
       <AccuracyPanel history={history}/>
       <ModelVsMarketPanel history={history}/>
+      <AutoRecentResultsCard leagueKey={leagueKey}/>
 
       {history.length === 0 ? (
         <Card>
