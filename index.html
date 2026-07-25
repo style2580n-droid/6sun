@@ -971,6 +971,36 @@ function getHandicapProbs(scoreCounts, totalSims) {
 
 const HOME_ADV = 65;
 
+// getAdvancedStatsEstimate: EPL 앱의 getAdvancedStats() 2순위 로직(ELO/xG 기반 근사식)만 이식.
+// EPL과 달리 처음부터 "실측 하드코딩 테이블"을 안 두고 이 추정식만 씀 — EPL 쪽에서
+// 20팀 전부 동일값(psxg:1.35 등)이 박힌 플레이스홀더 테이블이 실제로는 FBref/FotMob
+// 데이터가 아니라 미완성 스켈레톤이었던 게 이번에 확인됐음(EPL_고급지표_인수인계.md).
+// 그래서 8개리그 앱은 애초에 그런 "가짜 실측값" 테이블 없이, 항상 ELO+xG 기반 추정치임을
+// estimated:true로 명시하고 시작함 — FBref/FotMob을 표방하지 않음(정직한 라벨).
+function getAdvancedStatsEstimate(team) {
+  const xgData = TEAM_XG[team];
+  if (!xgData || !Number.isFinite(xgData.xG) || !Number.isFinite(xgData.xGA)) return null; // xG 자체가 없으면 억지로 추정 안 함
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const xG = xgData.xG, xGA = xgData.xGA;
+  const npXg = xG * 0.9; // EPL 앱도 npXg 없을 때 쓰는 동일 폴백
+  const base = getEffectiveElo(team);
+
+  const psxg = clamp((xG * 0.55 + npXg * 0.45), 0.85, 2.25);
+  const psxgAllowed = clamp(xGA * 0.98, 0.65, 1.50);
+  const bigChances = clamp(xG * 1.55, 1.3, 4.0);
+  const bigChancesAllowed = clamp(xGA * 1.65, 1.0, 2.4);
+  const shotQuality = clamp(0.092 + (base - 1400) / 7000 + (xG - 1.3) * 0.010, 0.075, 0.150);
+
+  return {
+    psxg: +psxg.toFixed(2),
+    psxgAllowed: +psxgAllowed.toFixed(2),
+    bigChances: +bigChances.toFixed(1),
+    bigChancesAllowed: +bigChancesAllowed.toFixed(1),
+    shotQuality: +shotQuality.toFixed(3),
+    estimated: true,
+  };
+}
+
 // 라이벌/더비 매치 목록 — EPL 앱과 동일하게 순수 확률 공식(데이터 의존 없음)으로 반영.
 // 실제로 잘 알려진 더비만 넣었고, 애매하거나 이번 시즌 리그에 상대팀이 없는 조합은 뺐다.
 const RIVALRIES = {
@@ -2069,6 +2099,42 @@ function PredictTab({ leagueKey }) {
             </Card>
           )}
 
+          {(() => {
+            const hAdv = getAdvancedStatsEstimate(home), aAdv = getAdvancedStatsEstimate(away);
+            if (!hAdv && !aAdv) return null;
+            const AdvRow = ({label, hVal, aVal, higherBetter=true, fmt=v=>v?.toFixed?.(2)??"-"}) => {
+              const hGood = higherBetter ? (hVal > aVal) : (hVal < aVal);
+              const aGood = higherBetter ? (aVal > hVal) : (aVal < hVal);
+              return (
+                <div style={{display:"flex", alignItems:"center", gap:6, padding:"5px 0", borderBottom:`1px solid ${T.border}`}}>
+                  <span style={{flex:1, textAlign:"right", fontSize:13, fontWeight:700, color: hGood?T.green:T.text}}>{fmt(hVal)}</span>
+                  <span style={{width:120, textAlign:"center", fontSize:11, color:T.muted}}>{label}</span>
+                  <span style={{flex:1, textAlign:"left", fontSize:13, fontWeight:700, color: aGood?T.green:T.text}}>{fmt(aVal)}</span>
+                </div>
+              );
+            };
+            return (
+              <Card>
+                <div style={{textAlign:"center", marginBottom:8}}>
+                  <span style={{fontSize:12, color:T.muted}}>← {home}</span>
+                  <span style={{fontSize:13, fontWeight:700, color:T.text, margin:"0 10px"}}>🔬 고급 지표 비교</span>
+                  <span style={{fontSize:12, color:T.muted}}>{away} →</span>
+                </div>
+                <AdvRow label="PSxG (공격 품질)" hVal={hAdv?.psxg} aVal={aAdv?.psxg}/>
+                <AdvRow label="PSxG 허용 (GK)" hVal={hAdv?.psxgAllowed} aVal={aAdv?.psxgAllowed} higherBetter={false}/>
+                <AdvRow label="빅찬스 생성/경기" hVal={hAdv?.bigChances} aVal={aAdv?.bigChances}/>
+                <AdvRow label="빅찬스 허용/경기" hVal={hAdv?.bigChancesAllowed} aVal={aAdv?.bigChancesAllowed} higherBetter={false}/>
+                <AdvRow label="슈팅 품질 (xG/슈팅)" hVal={hAdv?.shotQuality} aVal={aAdv?.shotQuality} fmt={v=>v?.toFixed?.(3)??"-"}/>
+                <div style={{fontSize:10.5, color:T.dim, marginTop:6, textAlign:"center"}}>
+                  📐 ELO·xG 기반 추정치 (실측 FBref/FotMob 아님) · 초록색 = 비교 우위
+                  {(!hAdv || !aAdv) && <><br/><span style={{color:T.gold}}>※ 팀 xG 데이터가 아직 없어 한쪽은 표시 못 함</span></>}
+                </div>
+              </Card>
+            );
+          })()}
+
+          <RecentFormPanel home={home} away={away}/>
+
           <button onClick={saveToHistory} disabled={saved}
             style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${saved?T.green:T.border}`,
                     background: saved ? "transparent" : T.surface, color: saved ? T.green : T.text,
@@ -2734,6 +2800,88 @@ function AutoResultRow({ leagueKey, game }) {
         {topScore ? ` · 예상 ${topScore}` : ""}
       </div>
     </div>
+  );
+}
+
+// getTeamRecentForm: 실제 SCHEDULE(파이프라인 실측 종료경기)에서 해당 팀의 최근 5경기를
+// 뽑아 승/무/패·득실·상대팀을 반환. EPL 앱의 RECENT_FORM처럼 별도 저장소를 새로 안 만들고
+// 이미 있는 SCHEDULE을 그대로 재사용 — 8개리그 앱은 이미 파이프라인이 SCHEDULE에 실제
+// 결과를 넣어주고 있어서(자동정산/자동기록카드가 쓰는 것과 동일 소스) 중복 데이터 불필요.
+function getTeamRecentForm(team) {
+  const rows = SCHEDULE
+    .filter(g => g && (g.home === team || g.away === team) &&
+      Number.isFinite(g.homeGoals) && Number.isFinite(g.awayGoals))
+    .map(g => {
+      const isHome = g.home === team;
+      const gf = isHome ? g.homeGoals : g.awayGoals;
+      const ga = isHome ? g.awayGoals : g.homeGoals;
+      const opp = isHome ? g.away : g.home;
+      const r = gf > ga ? "W" : gf === ga ? "D" : "L";
+      return { r, gf, ga, opp, date: g.date || "" };
+    })
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return rows.slice(0, 5);
+}
+
+function RecentFormPanel({ home, away }) {
+  const [open, setOpen] = useState(true);
+  const hForm = getTeamRecentForm(home);
+  const aForm = getTeamRecentForm(away);
+  if (!hForm.length && !aForm.length) return null;
+
+  const resultColor = (r) => r === "W" ? T.green : (r === "D" ? T.gold : T.red);
+  const resultKr = (r) => r === "W" ? "승" : (r === "D" ? "무" : "패");
+  const summarize = (form) => {
+    if (!form.length) return null;
+    let w = 0, d = 0, l = 0, gf = 0, ga = 0;
+    form.forEach(m => { if (m.r === "W") w++; else if (m.r === "D") d++; else l++; gf += m.gf; ga += m.ga; });
+    return { w, d, l, gf, ga, pts: w * 3 + d, record: `${w}승 ${d}무 ${l}패` };
+  };
+  const hs = summarize(hForm), as = summarize(aForm);
+
+  const TeamColumn = ({ team, form, summary }) => (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 800, color: T.text, marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}>
+        <TeamCrest name={team} size={18} /> {team}
+      </div>
+      {form.length ? (
+        <>
+          <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+            {form.map((m, i) => (
+              <div key={i} title={`${resultKr(m.r)} ${m.gf}-${m.ga} vs ${m.opp}`}
+                style={{ width: 20, height: 20, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center",
+                  background: T.surface, border: `1px solid ${resultColor(m.r)}`, color: resultColor(m.r), fontSize: 10.5, fontWeight: 800 }}>
+                {resultKr(m.r)}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 10.5, color: T.muted }}>
+            <span style={{ color: T.text, fontWeight: 700 }}>{summary.record}</span>
+            <span style={{ marginLeft: 6 }}>· {summary.gf}득 {summary.ga}실 · 폼승점 {summary.pts}/15</span>
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 11, color: T.dim, padding: "6px 0" }}>최근 경기 데이터 없음</div>
+      )}
+    </div>
+  );
+
+  return (
+    <Card>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: open ? 8 : 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: T.text }}>📋 최근 5경기 폼 (파이프라인 실측)</div>
+        <button onClick={() => setOpen(v => !v)}
+          style={{ padding: "4px 10px", borderRadius: 7, border: `1px solid ${T.border}`, background: "transparent", color: T.muted, fontSize: 11, cursor: "pointer" }}>
+          {open ? "접기" : "펼치기"}
+        </button>
+      </div>
+      {open && (
+        <div style={{ display: "flex", gap: 14 }}>
+          <TeamColumn team={home} form={hForm} summary={hs} />
+          <TeamColumn team={away} form={aForm} summary={as} />
+        </div>
+      )}
+    </Card>
   );
 }
 
