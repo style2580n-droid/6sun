@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
-<title>유럽 6대리그 예측기 v0.1 (스켈레톤)</title>
+<title>8개리그 예측기 v0.1</title>
 
 <link rel="manifest" href="./manifest.json"/>
 <meta name="theme-color" content="#05080f"/>
@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-<meta name="apple-mobile-web-app-title" content="6대리그 예측기"/>
+<meta name="apple-mobile-web-app-title" content="8개리그 예측기"/>
 <script>
 window.addEventListener("error", function(ev){
   var el = document.getElementById("root");
@@ -1815,7 +1815,7 @@ async function generateShareImage(leagueKey, home, away, result) {
 
   ctx.font = "12px sans-serif"; ctx.fillStyle = "#2a3f5f";
   ctx.fillText(`생성일 ${new Date().toLocaleDateString("ko-KR")} · 통계 모델 기반 예측(참고용)`, W/2, H-42);
-  ctx.fillText("v1.0 · 유럽 6대리그 예측기", W/2, H-22);
+  ctx.fillText("v1.0 · 8개리그 예측기", W/2, H-22);
   return canvas;
 }
 
@@ -1941,6 +1941,24 @@ function H2HCard({ teamA, teamB }) {
   );
 }
 
+function CollapsibleSection({title, defaultOpen=false, children}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div style={{marginTop:12}}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+                padding:"12px 14px", borderRadius:10, border:`1px solid ${T.border}`,
+                background:T.surface, color:T.text, cursor:"pointer"}}>
+        <span style={{fontSize:13, fontWeight:800}}>{title}</span>
+        <span style={{fontSize:11.5, color:T.accent, fontWeight:700, flexShrink:0, marginLeft:8}}>
+          {open ? "▲ 접기" : "▼ 펼치기"}
+        </span>
+      </button>
+      {open && <div>{children}</div>}
+    </div>
+  );
+}
+
 function PredictTab({ leagueKey, pendingMatch }) {
   const teams = LEAGUES[leagueKey].teams;
   const [home, setHome] = useState(teams[0]);
@@ -2057,13 +2075,15 @@ function PredictTab({ leagueKey, pendingMatch }) {
             <Bar label={`${away} 승`} value={result.awayWinProb} color={T.red}/>
           </Card>
 
-          <TeamStyleRadarCard leagueKey={leagueKey} home={home} away={away}/>
+          <CollapsibleSection title="🔍 예측 근거 & 상대전적">
+            <TeamStyleRadarCard leagueKey={leagueKey} home={home} away={away}/>
 
-          <PredictionExplainCard home={home} away={away} result={result}/>
+            <PredictionExplainCard home={home} away={away} result={result}/>
 
-          <LiveInPlayPanel home={home} away={away} lambdaHome={result.lambdaHome} lambdaAway={result.lambdaAway}/>
+            <LiveInPlayPanel home={home} away={away} lambdaHome={result.lambdaHome} lambdaAway={result.lambdaAway}/>
 
-          {home !== away && <H2HCard teamA={home} teamB={away}/>}
+            {home !== away && <H2HCard teamA={home} teamB={away}/>}
+          </CollapsibleSection>
 
           <Card>
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>예상 스코어 Top 5</div>
@@ -2076,6 +2096,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
             ))}
           </Card>
 
+          <CollapsibleSection title="📊 상세 통계 (마켓·핸디캡·고급지표·최근폼)">
           <Card>
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>마켓 지표</div>
             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, fontSize:12.5}}>
@@ -2142,6 +2163,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
           })()}
 
           <RecentFormPanel home={home} away={away}/>
+          </CollapsibleSection>
 
           <button onClick={saveToHistory} disabled={saved}
             style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${saved?T.green:T.border}`,
@@ -2150,6 +2172,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
             {saved ? "✅ 기록 탭에 저장됨" : "📝 이 예측 기록에 저장"}
           </button>
 
+          <CollapsibleSection title="📡 배당 비교 · 결과 공유">
           <OddsComparisonPanel leagueKey={leagueKey} home={home} away={away}
             modelProbs={{home: result.homeWinProb, draw: result.drawProb, away: result.awayWinProb}}
             onFairProbs={setMarketFairProbs}/>
@@ -2163,6 +2186,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
               : " 까지만 반영된 상태입니다. 이 매치업은 xG 데이터가 없어(신규 승격팀 등) ELO 기준으로만 계산됐습니다."}
             {" "}최근폼·ML 앙상블은 아직 미반영 — 해당 실데이터가 파이프라인에 들어오면 순차 적용 예정입니다.
           </div>
+          </CollapsibleSection>
         </React.Fragment>
       )}
     </div>
@@ -2520,7 +2544,7 @@ function icsDateTimePlusHours(dateStr, timeStr, hours) {
 function generateICS(leagueLabel, matches) {
   const now = new Date();
   const stamp = `${now.getUTCFullYear()}${icsPad2(now.getUTCMonth()+1)}${icsPad2(now.getUTCDate())}T${icsPad2(now.getUTCHours())}${icsPad2(now.getUTCMinutes())}00Z`;
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//6대리그 예측기//KO", "CALSCALE:GREGORIAN"];
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//8개리그 예측기//KO", "CALSCALE:GREGORIAN"];
   matches.forEach((g, i) => {
     if (!g.date) return;
     lines.push("BEGIN:VEVENT");
@@ -2546,6 +2570,8 @@ function downloadICS(filename, content) {
 
 function ScheduleTab({ leagueKey, onSelectMatch }) {
   const lg = LEAGUES[leagueKey];
+  const [showPast, setShowPast] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState(null);
   if (!SCHEDULE.length) {
     return (
       <Card>
@@ -2563,13 +2589,53 @@ function ScheduleTab({ leagueKey, onSelectMatch }) {
       </Card>
     );
   }
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+
   // 날짜별로 묶어서 EPL 앱과 비슷한 카드 구조로 표시
   const byDate = {};
   for (const g of SCHEDULE) {
     const key = g.date || "날짜 미정";
     (byDate[key] = byDate[key] || []).push(g);
   }
-  const dates = Object.keys(byDate).sort();
+  const allDates = Object.keys(byDate).sort();
+  // 다가오는 경기를 최상단에 항상 표시, 종료된 경기는 접어서 하단에 기본 숨김
+  const upcomingDates = allDates.filter(date => date >= today);
+  const pastDates = allDates.filter(date => date < today).slice().reverse();
+  // 원하는 달만 골라서 보기
+  const months = [...new Set(allDates.map(date => date.slice(0,7)))].sort();
+  const monthDates = selectedMonth ? allDates.filter(date => date.startsWith(selectedMonth)) : null;
+
+  const renderDateCard = (date) => (
+    <Card key={date}>
+      <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
+        <span style={{fontSize:12.5, fontWeight:800, color: date < today ? T.muted : date === today ? T.gold : T.cyan}}>
+          📅 {date}
+        </span>
+        {date === today && <span style={{fontSize:11, padding:"2px 8px", borderRadius:10, background:"rgba(245,166,35,0.2)", color:T.gold, fontWeight:700}}>오늘</span>}
+        {date < today && <span style={{fontSize:11, color:T.dim}}>종료</span>}
+      </div>
+      {byDate[date].map((g, i) => (
+        <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 4px",
+          borderBottom: i<byDate[date].length-1 ? `1px solid ${T.border}` : "none"}}>
+          <span style={{color:T.muted, fontSize:11, width:44, flexShrink:0}}>{g.time ? `${g.time}` : ""}</span>
+          <div style={{flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8, minWidth:0}}>
+            <TeamCrest name={g.home} size={22}/>
+            <span style={{color:T.text, fontSize:12.5, textAlign:"right", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.home}</span>
+            <span style={{color:T.dim, fontSize:11}}>vs</span>
+            <span style={{color:T.text, fontSize:12.5, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.away}</span>
+            <TeamCrest name={g.away} size={22}/>
+          </div>
+          {onSelectMatch && (
+            <button onClick={() => onSelectMatch(g.home, g.away)}
+              title="이 매치업으로 예측 보기"
+              style={{marginLeft:6, flexShrink:0, padding:"5px 10px", borderRadius:7, border:"none",
+                background:T.accent, color:"#fff", fontSize:12, fontWeight:800, cursor:"pointer"}}>▶</button>
+          )}
+        </div>
+      ))}
+    </Card>
+  );
 
   return (
     <div>
@@ -2580,30 +2646,56 @@ function ScheduleTab({ leagueKey, onSelectMatch }) {
           📅 {lg.label} 일정 캘린더로 내보내기 (.ics)
         </button>
       </Card>
-      {dates.map(date => (
-        <Card key={date}>
-          <div style={{fontSize:12.5, fontWeight:800, color:T.cyan, marginBottom:8}}>📅 {date}</div>
-          {byDate[date].map((g, i) => (
-            <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 4px",
-              borderBottom: i<byDate[date].length-1 ? `1px solid ${T.border}` : "none"}}>
-              <span style={{color:T.muted, fontSize:11, width:44, flexShrink:0}}>{g.time ? `${g.time}` : ""}</span>
-              <div style={{flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8, minWidth:0}}>
-                <TeamCrest name={g.home} size={22}/>
-                <span style={{color:T.text, fontSize:12.5, textAlign:"right", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.home}</span>
-                <span style={{color:T.dim, fontSize:11}}>vs</span>
-                <span style={{color:T.text, fontSize:12.5, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.away}</span>
-                <TeamCrest name={g.away} size={22}/>
-              </div>
-              {onSelectMatch && (
-                <button onClick={() => onSelectMatch(g.home, g.away)}
-                  title="이 매치업으로 예측 보기"
-                  style={{marginLeft:6, flexShrink:0, padding:"5px 10px", borderRadius:7, border:"none",
-                    background:T.accent, color:"#fff", fontSize:12, fontWeight:800, cursor:"pointer"}}>▶</button>
-              )}
+      {months.length > 1 && (
+        <div style={{display:"flex", gap:6, overflowX:"auto", padding:"10px 2px 2px", marginTop:10}}>
+          <button onClick={() => setSelectedMonth(null)}
+            style={{flexShrink:0, padding:"6px 13px", borderRadius:20, border:`1px solid ${!selectedMonth?T.accent:T.border}`,
+                    background: !selectedMonth?T.accent:T.surface, color: !selectedMonth?"#fff":T.muted,
+                    fontSize:12, fontWeight:700, cursor:"pointer"}}>
+            전체
+          </button>
+          {months.map(m => {
+            const active = selectedMonth === m;
+            const label = `${m.slice(2,4)}.${m.slice(5,7)}`;
+            return (
+              <button key={m} onClick={() => setSelectedMonth(m)}
+                style={{flexShrink:0, padding:"6px 13px", borderRadius:20, border:`1px solid ${active?T.accent:T.border}`,
+                        background: active?T.accent:T.surface, color: active?"#fff":T.muted,
+                        fontSize:12, fontWeight:700, cursor:"pointer"}}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {selectedMonth ? (
+        monthDates.length === 0 ? (
+          <Card style={{marginTop:10, textAlign:"center"}}>
+            <div style={{fontSize:12.5, color:T.muted}}>해당 월 경기가 없습니다.</div>
+          </Card>
+        ) : monthDates.map(renderDateCard)
+      ) : (
+        <React.Fragment>
+          {upcomingDates.length === 0 && (
+            <Card style={{marginTop:10, textAlign:"center"}}>
+              <div style={{fontSize:12.5, color:T.muted}}>예정된 경기가 없습니다.</div>
+            </Card>
+          )}
+          {upcomingDates.map(renderDateCard)}
+          {pastDates.length > 0 && (
+            <div style={{marginTop:14}}>
+              <button onClick={() => setShowPast(s => !s)}
+                style={{width:"100%", padding:"10px 0", borderRadius:9, border:`1px solid ${T.border}`,
+                        background:T.surface, color:T.muted, fontSize:12.5, fontWeight:700, cursor:"pointer"}}>
+                {showPast
+                  ? "▲ 종료된 경기 숨기기"
+                  : `▼ 종료된 경기 보기 (${pastDates.reduce((n,dt)=>n+byDate[dt].length,0)}경기)`}
+              </button>
+              {showPast && pastDates.map(renderDateCard)}
             </div>
-          ))}
-        </Card>
-      ))}
+          )}
+        </React.Fragment>
+      )}
     </div>
   );
 }
@@ -3603,9 +3695,9 @@ function App() {
   return (
     <div style={{maxWidth:520, margin:"0 auto", minHeight:"100vh", paddingBottom:30}}>
       <div style={{padding:"18px 14px 10px", textAlign:"center"}}>
-        <div style={{fontSize:19, fontWeight:900, color:T.text}}>⚽ 유럽 6대리그 예측기 <span style={{fontSize:12.5, color:T.cyan, fontWeight:600}}>v0.1</span></div>
+        <div style={{fontSize:19, fontWeight:900, color:T.text}}>⚽ 8개리그 예측기 <span style={{fontSize:12.5, color:T.cyan, fontWeight:600}}>v0.1</span></div>
         <div style={{fontSize:11, color:T.muted, marginTop:3}}>
-          라리가 · 분데스리가 · 세리에A · 리그앙 · 에레디비시 · 챔피언십
+          라리가 · 분데스리가 · 세리에A · 리그앙 · 에레디비시 · 챔피언십 · MLS · 엘리테세리엔
         </div>
       </div>
 
