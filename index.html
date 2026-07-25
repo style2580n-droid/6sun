@@ -272,6 +272,15 @@ const LEAGUE_ORDER = ["laliga","bundesliga","seriea","ligue1","eredivisie","cham
 
 // ============================================================ 전역 슬롯 (리그 전환 시 통째로 교체)
 let ELO = seedElo(LEAGUES.laliga.teams);
+// ELO_DELTA: 2026-07-25 추가. 정적 ELO(파이프라인이 6시간마다 ClubElo에서 갱신)는 절대 직접
+// 안 건드리고, 그 위에 더하는 보정치 레이어. { 팀명: number(보정치, 기본 0) }.
+// 이유: EPL 앱의 _dynamicElo처럼 base값 자체를 덮어써버리면, 다음 파이프라인 갱신 때 들어오는
+// ClubElo 실측치를 우리 자체 계산값이 영구히 가려버림(파이프라인이 없는 EPL엔 문제없지만
+// 8개리그 앱은 정적값이 계속 새로 들어오므로 델타 방식이 안전함). 실제 사용은 getEffectiveElo() 참고.
+let ELO_DELTA = {};
+// ELO_DELTA_PROCESSED: 이미 델타에 반영한 종료경기를 식별하는 키(`home|away|date`) 집합.
+// 같은 경기를 파이프라인 갱신 때마다 중복 반영하지 않기 위함.
+let ELO_DELTA_PROCESSED = new Set();
 let CLUB_ABBR = seedAbbr("laliga", LEAGUES.laliga.teams);
 const clubAbbr = n => (n && CLUB_ABBR[n]) ? CLUB_ABBR[n] : (n ? n.slice(0,3) : "");
 
@@ -816,6 +825,8 @@ function switchLeagueData(leagueKey) {
   H2H = {};
   LEADERBOARD = { scorers: {}, assists: {} };
   PLAYER_BASELINE = {};
+  ELO_DELTA = {};
+  ELO_DELTA_PROCESSED = new Set();
 }
 
 // ============================================================ 예측 엔진 v2 (EPL 앱에서 검증된 순수 함수 이식)
@@ -832,6 +843,69 @@ function switchLeagueData(leagueKey) {
 function expScore(ra, rb) {
   return 1 / (1 + Math.pow(10, (rb - ra) / 400));
 }
+
+// ============================================================ 동적 ELO 피드백 (2026-07-25 추가)
+// getEffectiveElo: 예측엔진(computeLambdas/predictMatchV2)과 화면 표시가 전부 이 함수를 통해서만
+// ELO를 읽는다 — "정적 ELO + 우리가 누적한 델타"가 실질 레이팅. 정적 ELO(ELO[team]) 자체는
+// switchLeagueData/loadPipelineData 쪽 코드 말고는 아무도 직접 대입하지 않는다(불변 원칙 유지).
+function getEffectiveElo(team) {
+  const staticVal = (typeof ELO[team] === "number") ? ELO[team] : 1500;
+  const delta = ELO_DELTA[team];
+  return staticVal + (typeof delta === "number" ? delta : 0);
+}
+
+// 골득실차에 따른 K-factor 가중치 — EPL 앱의 updateEloAfterMatch와 동일한 margin 공식(대승일수록
+// 변화폭 확대). 8개리그는 전부 정규리그뿐이라 EPL처럼 스테이지별 K(조별/토너먼트 등) 구분은 불필요.
+function eloMarginFactor(homeGoals, awayGoals) {
+  const diff = Math.abs(homeGoals - awayGoals);
+  return diff <= 1 ? 1 : (diff === 2 ? 1.5 : 1.75);
+}
+const ELO_DELTA_K = 20; // EPL의 group(정규리그) 단계와 동일 값
+
+// updateEloDelta: 종료경기 1건을 델타에 반영. static ELO는 절대 안 건드리고 ELO_DELTA만 갱신.
+function updateEloDelta(home, away, homeGoals, awayGoals) {
+  if (!(home in ELO) || !(away in ELO)) return; // 이 리그 소속 팀이 아니면 무시(데이터 오류 방지)
+  const homeEff = getEffectiveElo(home) + HOME_ADV;
+  const awayEff = getEffectiveElo(away);
+  const expectedHome = expScore(homeEff, awayEff);
+  let actualHome = 0.5;
+  if (homeGoals > awayGoals) actualHome = 1; else if (homeGoals < awayGoals) actualHome = 0;
+  const change = ELO_DELTA_K * eloMarginFactor(homeGoals, awayGoals) * (actualHome - expectedHome);
+  ELO_DELTA[home] = (ELO_DELTA[home] || 0) + change;
+  ELO_DELTA[away] = (ELO_DELTA[away] || 0) - change;
+}
+
+// decayEloDeltaForLeague: 파이프라인이 새로 갱신될 때마다 기존 델타를 살짝 줄인다. ClubElo
+// 자체도 시간이 지나면 같은 경기 결과를 자기 레이팅에 반영하므로, 우리 델타를 영구히 100%
+// 유지하면 "이중 반영"이 된다. 0.85는 임의 초기값 — 실측 근거 없음, 다음 세션에서 조정 검토.
+function decayEloDeltaForLeague(factor = 0.85) {
+  Object.keys(ELO_DELTA).forEach(t => {
+    const v = ELO_DELTA[t] * factor;
+    // 델타가 충분히 작아지면(±1 미만) 아예 지워서 ELO_DELTA 객체가 무한정 커지는 것 방지
+    if (Math.abs(v) < 1) delete ELO_DELTA[t]; else ELO_DELTA[t] = v;
+  });
+}
+
+// applyEloDeltaForNewResults: SCHEDULE의 종료경기 중 아직 델타에 반영 안 한 것만 골라 반영하고,
+// 반영한 게 있으면(=파이프라인이 새로 뭔가 가져왔으면) 감쇠도 같이 수행한 뒤 storage에 저장.
+// App의 데이터로딩 useEffect에서 loadPipelineData() 완료 직후 호출한다.
+async function applyEloDeltaForNewResults(leagueKey) {
+  const finished = SCHEDULE.filter(g => g && g.home && g.away &&
+    Number.isFinite(g.homeGoals) && Number.isFinite(g.awayGoals));
+  const newOnes = finished.filter(g => !ELO_DELTA_PROCESSED.has(`${g.home}|${g.away}|${g.date}`));
+  if (!newOnes.length) return false;
+  decayEloDeltaForLeague();
+  for (const g of newOnes) {
+    updateEloDelta(g.home, g.away, g.homeGoals, g.awayGoals);
+    ELO_DELTA_PROCESSED.add(`${g.home}|${g.away}|${g.date}`);
+  }
+  try {
+    await window.storage.set(`wc:eloDelta:${leagueKey}`, JSON.stringify(ELO_DELTA));
+    await window.storage.set(`wc:eloDeltaProcessed:${leagueKey}`, JSON.stringify([...ELO_DELTA_PROCESSED]));
+  } catch (e) { /* 저장 실패해도 이번 세션 메모리상 델타는 유지 — 다음 갱신 때 재시도됨 */ }
+  return true;
+}
+
 function calcDrawProb(eloDiff) {
   const base = 0.27;
   const closeness = Math.max(0, 1 - Math.abs(eloDiff) / 500);
@@ -875,6 +949,24 @@ function computeMarketStats(scoreCounts, totalSims) {
     cleanSheet: { home: p(homeCS), away: p(awayCS) },
     exactDist: exactDist.slice(0, 5),
   };
+}
+
+// getHandicapProbs: EPL 앱(894행)에서 그대로 포팅. scoreCounts/totalSims만 있으면 되는
+// 순수 함수라 다른 데이터(xG·부상 등)에 의존하지 않음 — 이식 리스크 없음.
+// 홈팀 기준 아시안 핸디캡(-1.5~+1.5)을 줬을 때 홈팀이 그 라인을 커버할 확률.
+function getHandicapProbs(scoreCounts, totalSims) {
+  const handicaps = [-1.5, -1.0, -0.5, 0, 0.5, 1.0, 1.5];
+  const result = {};
+  for (const h of handicaps) {
+    let cover = 0;
+    for (const [score, cnt] of Object.entries(scoreCounts)) {
+      const [hg, ag] = score.split("-").map(Number);
+      if (hg + h > ag) cover += cnt;
+    }
+    const key = h > 0 ? `+${h}` : `${h}`;
+    result[key] = cover / totalSims;
+  }
+  return result;
 }
 
 const HOME_ADV = 65;
@@ -977,8 +1069,8 @@ function mlEnsembleProbs(eloDiff, xgDiff, hasXg) {
 }
 
 function computeLambdas(leagueKey, homeName, awayName) {
-  const homeElo = (ELO[homeName] ?? 1500) + HOME_ADV;
-  const awayElo = (ELO[awayName] ?? 1500);
+  const homeElo = getEffectiveElo(homeName) + HOME_ADV;
+  const awayElo = getEffectiveElo(awayName);
   const eloDiff = homeElo - awayElo;
   const eloLambdaFactor = Math.max(-0.35, Math.min(0.35, eloDiff / 200 * 0.18));
   const lgBase = LEAGUE_LAMBDA[leagueKey] || LEAGUE_LAMBDA.laliga;
@@ -1033,8 +1125,8 @@ function computeLambdas(leagueKey, homeName, awayName) {
 
 
 function predictMatchV2(leagueKey, homeName, awayName, sims = 100000) {
-  const homeElo = (ELO[homeName] ?? 1500) + HOME_ADV;
-  const awayElo = (ELO[awayName] ?? 1500);
+  const homeElo = getEffectiveElo(homeName) + HOME_ADV;
+  const awayElo = getEffectiveElo(awayName);
   const eloDiff = homeElo - awayElo;
 
   const winProbRaw = expScore(homeElo, awayElo);
@@ -1107,6 +1199,7 @@ function predictMatchV2(leagueKey, homeName, awayName, sims = 100000) {
     topScores,
     overUnder: computeOverUnder(scoreCounts, safeSims),
     marketStats: computeMarketStats(scoreCounts, safeSims),
+    handicapProbs: getHandicapProbs(scoreCounts, safeSims),
     sims: safeSims,
   };
 }
@@ -1240,7 +1333,7 @@ function getTeamRadarProfile(leagueKey, team) {
     const xg = TEAM_XG[t];
     const xG = xg && Number.isFinite(xg.xG) ? xg.xG : 1.35;
     const xGA = xg && Number.isFinite(xg.xGA) ? xg.xGA : 1.35;
-    raw[t] = { "공격(xG)": xG, "수비": -xGA, "ELO": ELO[t] ?? 1500 };
+    raw[t] = { "공격(xG)": xG, "수비": -xGA, "ELO": getEffectiveElo(t) };
   }
   const norm = {};
   teams.forEach(t => { norm[t] = {}; });
@@ -1895,7 +1988,7 @@ function PredictTab({ leagueKey }) {
           <Card>
             <div style={{fontSize:12, color:T.muted, marginBottom:10, display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
               <TeamCrest name={home} size={20}/> {home} <span style={{color:T.dim}}>({clubAbbr(home)})</span> vs <TeamCrest name={away} size={20}/> {away} <span style={{color:T.dim}}>({clubAbbr(away)})</span>
-              <span style={{color:T.dim}}> · Elo {ELO[home]??1500} vs {ELO[away]??1500}</span>
+              <span style={{color:T.dim}}> · Elo {Math.round(getEffectiveElo(home))} vs {Math.round(getEffectiveElo(away))}</span>
             </div>
             {result.rivalry && (
               <div style={{display:"inline-block", background:"rgba(245,166,35,0.15)", border:`1px solid ${T.gold}`,
@@ -1955,6 +2048,27 @@ function PredictTab({ leagueKey }) {
             </div>
           </Card>
 
+          {result.handicapProbs && (
+            <Card>
+              <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>🎯 핸디캡 (Asian Handicap)</div>
+              <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>홈팀 기준 커버 확률 — EPL 앱과 동일 공식 이식(2026-07-25)</div>
+              <div style={{display:"flex", flexWrap:"wrap", gap:8}}>
+                {Object.entries(result.handicapProbs).map(([h, prob]) => {
+                  const isPos = prob > 0.55, isNeg = prob < 0.45;
+                  const color = isPos ? T.green : isNeg ? T.red : T.muted;
+                  return (
+                    <div key={h} style={{flex:"1 1 22%", minWidth:70, textAlign:"center", padding:"8px 4px",
+                      borderRadius:9, background:T.surface, border:`1px solid ${isPos?T.green:isNeg?T.red:T.border}`}}>
+                      <div style={{fontSize:11, color:T.muted}}>홈 {h}</div>
+                      <div style={{fontSize:15, fontWeight:800, color, marginTop:2}}>{(prob*100).toFixed(0)}%</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{fontSize:10.5, color:T.dim, marginTop:8}}>💡 홈팀이 해당 핸디캡을 극복할 확률. 50% 이상이면 홈팀 유리.</div>
+            </Card>
+          )}
+
           <button onClick={saveToHistory} disabled={saved}
             style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${saved?T.green:T.border}`,
                     background: saved ? "transparent" : T.surface, color: saved ? T.green : T.text,
@@ -2000,7 +2114,7 @@ function TeamListTab({ leagueKey, favorites, onToggleFavorite }) {
             <TeamCrest name={t} size={26}/>
             <span style={{fontSize:13, color:T.text}}>{t}</span>
           </div>
-          <span style={{fontSize:11.5, color:T.muted}}>ELO {ELO[t] ?? 1500}</span>
+          <span style={{fontSize:11.5, color:T.muted}}>ELO {Math.round(getEffectiveElo(t))}</span>
         </div>
       ))}
     </Card>
@@ -2008,7 +2122,7 @@ function TeamListTab({ leagueKey, favorites, onToggleFavorite }) {
 }
 
 function RankingTab({ leagueKey }) {
-  const teams = [...LEAGUES[leagueKey].teams].sort((a,b) => (ELO[b]??1500) - (ELO[a]??1500));
+  const teams = [...LEAGUES[leagueKey].teams].sort((a,b) => getEffectiveElo(b) - getEffectiveElo(a));
   return (
     <Card>
       <div style={{fontSize:12, color:T.dim, marginBottom:10}}>
@@ -2020,7 +2134,7 @@ function RankingTab({ leagueKey }) {
           <span style={{width:22, fontSize:12, color:T.muted, fontWeight:700}}>{i+1}</span>
           <TeamCrest name={t} size={20}/>
           <span style={{flex:1, fontSize:13, color:T.text}}>{t}</span>
-          <span style={{fontSize:12.5, color:T.accent, fontWeight:700}}>{ELO[t] ?? 1500}</span>
+          <span style={{fontSize:12.5, color:T.accent, fontWeight:700}}>{Math.round(getEffectiveElo(t))}</span>
         </div>
       ))}
     </Card>
@@ -2132,7 +2246,7 @@ function SeasonOutlookTab({ leagueKey }) {
 function computeStandingsTable(leagueKey) {
   const teams = LEAGUES[leagueKey].teams;
   const table = {};
-  teams.forEach(t => { table[t] = { team: t, elo: ELO[t] ?? 1500, p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 }; });
+  teams.forEach(t => { table[t] = { team: t, elo: getEffectiveElo(t), p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 }; });
 
   let playedCount = 0;
   for (const fixture of SCHEDULE) {
@@ -2211,8 +2325,13 @@ function SettingsTab({ leagueKey, favorites, onToggleFavorite, onDataReset, noti
   const resetElo = async () => {
     setResetting("elo");
     try {
-      await window.storage.delete(`wc:elo:${leagueKey}`);
+      // 2026-07-25: 정적 ELO 재조회뿐 아니라 동적 델타 레이어(ELO_DELTA)도 같이 지운다.
+      // 델타를 안 지우면 "리셋했는데 랭킹이 그대로"인 것처럼 보이는 혼란이 생김.
+      await window.storage.delete(`wc:eloDelta:${leagueKey}`);
+      await window.storage.delete(`wc:eloDeltaProcessed:${leagueKey}`);
       Object.assign(ELO, seedElo(lg.teams));
+      ELO_DELTA = {};
+      ELO_DELTA_PROCESSED = new Set();
     } catch (e) {}
     setResetting(null);
     onDataReset && onDataReset();
@@ -2296,7 +2415,7 @@ function SettingsTab({ leagueKey, favorites, onToggleFavorite, onDataReset, noti
         <button onClick={resetElo} disabled={resetting==="elo"}
           style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${T.border}`, background:T.surface,
                   color:T.text, fontSize:12, cursor: resetting ? "default" : "pointer", marginBottom:8}}>
-          {resetting==="elo" ? "초기화 중..." : "ELO를 파이프라인 기본값으로 재조회"}
+          {resetting==="elo" ? "초기화 중..." : "ELO 초기화 (파이프라인 기본값 + 동적 보정치 삭제)"}
         </button>
         <button onClick={resetHistory} disabled={resetting==="history"}
           style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${T.red}`, background:"transparent",
@@ -2959,7 +3078,7 @@ function SquadTab({ leagueKey }) {
   const squad = SQUADS[team];
   const xg = TEAM_XG[team];
   const xgValid = xg && Number.isFinite(xg.xG) && Number.isFinite(xg.xGA);
-  const elo = ELO[team];
+  const elo = getEffectiveElo(team);
 
   const POS_LABELS = [
     { key: "gk", label: "GK", color: T.amber || T.cyan },
@@ -3262,14 +3381,20 @@ function App() {
 
   useEffect(() => {
     (async () => {
-      // 리그별 저장된 동적 ELO가 있으면 불러오고, 없으면 1500 기본값 시드 유지
+      // 정적 ELO는 파이프라인이 채운다(아래 loadPipelineData). 여기서는 리그 전환 시 초기화만.
       switchLeagueData(leagueKey);
+      // 저장된 동적 ELO 델타(있으면)를 불러온다 — 정적 ELO에 합치지 않고 별도 레이어(ELO_DELTA)로 유지.
+      // 2026-07-25: 예전에 여기 있던 wc:elo:${leagueKey} 스텁은 아무도 write하지 않는 죽은 코드였고,
+      // 설사 값이 있었어도 실행 순서상 바로 아래 loadPipelineData()의 Object.assign(ELO, data.elo)에
+      // 덮어써져서 무력화되는 구조였다(정적 ELO에 직접 합치는 방식 자체가 근본 원인) — 그래서 폐기하고
+      // 델타 전용 키(wc:eloDelta)로 교체함.
       try {
-        const saved = await window.storage.get(`wc:elo:${leagueKey}`);
-        if (saved && saved.value) {
-          const parsed = JSON.parse(saved.value);
-          Object.assign(ELO, parsed);
-        }
+        const savedDelta = await window.storage.get(`wc:eloDelta:${leagueKey}`);
+        if (savedDelta && savedDelta.value) Object.assign(ELO_DELTA, JSON.parse(savedDelta.value));
+      } catch (e) {}
+      try {
+        const savedProcessed = await window.storage.get(`wc:eloDeltaProcessed:${leagueKey}`);
+        if (savedProcessed && savedProcessed.value) ELO_DELTA_PROCESSED = new Set(JSON.parse(savedProcessed.value));
       } catch (e) {}
       try {
         const favSaved = await window.storage.get(`wc:favorites:${leagueKey}`);
@@ -3279,6 +3404,8 @@ function App() {
       }
       // 파이프라인이 아직 없으면 scheduleLoaded/logosLoaded 둘 다 false로 조용히 반환됨 (오류 아님)
       const { scheduleLoaded, logosLoaded } = await loadPipelineData(leagueKey);
+      // SCHEDULE이 이제 채워졌으니(있다면), 아직 델타에 반영 안 한 종료경기를 마저 반영.
+      try { await applyEloDeltaForNewResults(leagueKey); } catch (e) {}
       setPipelineStatus(scheduleLoaded || logosLoaded);
       setLeagueVersion(v => v + 1);
       setReady(true);
