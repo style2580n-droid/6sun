@@ -772,14 +772,45 @@ function computeEV(modelProb, fairOdds) {
 
 const ODDS_API_IO_KEY = "afb988f21e224372190ac852df6d2430c86be07b7a3bd8088f2a42950b648db0"; // EPL 앱과 동일한 실제 키로 교체 (2026-07-16)
 
+// ── CORS 프록시 폴백 (EPL 앱에서 이식, 2026-07-26) ──────────────────────
+// 문제: odds-api.io를 fetch()로 직접 호출하면 브라우저 CORS 정책에 막혀 매번
+// 조용히 실패했음(catch에서 삼켜져서 에러도 안 보였음) — 그래서 "배당 데이터를
+// 찾지 못했습니다"만 계속 떴던 것. DIRECT를 1순위로 먼저 시도하고, 막히면
+// 공개 CORS 프록시를 순서대로 시도하도록 EPL 앱과 동일한 방식으로 수정.
+const ODDS_PROXY_FALLBACKS = [
+  "DIRECT",
+  "https://corsproxy.io/?url=",
+  "https://api.allorigins.win/raw?url=",
+  "https://thingproxy.freeboard.io/fetch/",
+  "https://api.codetabs.com/v1/proxy?quest=",
+  "https://proxy.cors.sh/",
+  "https://corsproxy.org/?",
+];
+async function oddsFetchWithTimeout(url, options = {}, timeoutMs = 6000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function fetchOddsViaProxies(url, options = {}, timeoutMs = 6000) {
+  for (const p of ODDS_PROXY_FALLBACKS) {
+    try {
+      const target = p === "DIRECT" ? url : (p + encodeURIComponent(url));
+      const res = await oddsFetchWithTimeout(target, options, timeoutMs);
+      if (res && res.ok) return res;
+    } catch (e) { /* 다음 프록시로 */ }
+  }
+  return null;
+}
+
 async function fetchMatchOdds(leagueKey, home, away) {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
     const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
-    const res = await fetch(evUrl, { signal: controller.signal }).catch(() => null);
-    clearTimeout(timer);
-    if (!res || !res.ok) return null;
+    const res = await fetchOddsViaProxies(evUrl, {}, 6000);
+    if (!res) return null;
     const events = await res.json().catch(() => null);
     const list = Array.isArray(events) ? events : (Array.isArray(events?.data) ? events.data : null);
     if (!Array.isArray(list)) return null;
@@ -790,8 +821,8 @@ async function fetchMatchOdds(leagueKey, home, away) {
     if (!match) return null;
 
     const oddsUrl = `https://api.odds-api.io/v3/odds?apiKey=${ODDS_API_IO_KEY}&eventId=${match.id}`;
-    const oddsRes = await fetch(oddsUrl).catch(() => null);
-    if (!oddsRes || !oddsRes.ok) return null;
+    const oddsRes = await fetchOddsViaProxies(oddsUrl, {}, 6000);
+    if (!oddsRes) return null;
     const oddsData = await oddsRes.json().catch(() => null);
     const bk = oddsData?.bookmakers?.[0] || oddsData?.data?.bookmakers?.[0];
     const markets = bk?.markets || bk?.odds || [];
@@ -1613,12 +1644,9 @@ function extractAllBookmakerOddsFromOddsApiIo(leagueKey, home, away, data, swapp
 
 async function fetchAllBookmakerOdds(leagueKey, home, away) {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
     const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
-    const res = await fetch(evUrl, { signal: controller.signal }).catch(() => null);
-    clearTimeout(timer);
-    if (!res || !res.ok) return [];
+    const res = await fetchOddsViaProxies(evUrl, {}, 8000);
+    if (!res) return [];
     const events = await res.json().catch(() => null);
     const list = Array.isArray(events) ? events : (Array.isArray(events?.data) ? events.data : null);
     if (!Array.isArray(list)) return [];
@@ -1629,8 +1657,8 @@ async function fetchAllBookmakerOdds(leagueKey, home, away) {
     if (!match) return [];
 
     const oddsUrl = `https://api.odds-api.io/v3/odds?apiKey=${ODDS_API_IO_KEY}&eventId=${match.id}`;
-    const oddsRes = await fetch(oddsUrl).catch(() => null);
-    if (!oddsRes || !oddsRes.ok) return [];
+    const oddsRes = await fetchOddsViaProxies(oddsUrl, {}, 8000);
+    if (!oddsRes) return [];
     const oddsData = await oddsRes.json().catch(() => null);
     return extractAllBookmakerOddsFromOddsApiIo(leagueKey, home, away, oddsData, !!swapped);
   } catch (e) {
