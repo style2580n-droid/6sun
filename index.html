@@ -806,6 +806,117 @@ async function fetchOddsViaProxies(url, options = {}, timeoutMs = 6000) {
   return null;
 }
 
+// ============================================================ 확정 라인업 + 결장(부상/징계) — API-FOOTBALL
+// 2026-07-29 추가: 파이프라인에 이미 등록된 API_FOOTBALL_KEY1/2(무료 100회/일)로
+// 킥오프 임박 시 확정 라인업과 부상/징계 결장 정보를 가져온다. 위의
+// fetchOddsViaProxies(CORS 폴백)를 그대로 재사용 — 중복 프록시 코드 없음.
+// 리그ID는 collectors.py의 AF_LEAGUE_IDS와 동일 출처로 실측 확인된 값만 사용,
+// MLS/엘리테세리엔은 파이썬 쪽에도 리그ID가 없어 확정 불가하므로 의도적 미지원.
+const API_FOOTBALL_KEY = "5b5af774e93ff6f3ca80cb4eda56e00a"; // EPL 앱과 동일한 실제 키
+const AF_LEAGUE_IDS = {
+  laliga: 140, bundesliga: 78, seriea: 135, ligue1: 61,
+  eredivisie: 88, championship: 180,
+};
+
+async function afCached(key, ttlMs, fetcher) {
+  try {
+    const r = await window.storage.get(key, false);
+    if (r?.value) {
+      const cached = JSON.parse(r.value);
+      if (cached.ts && (Date.now() - cached.ts) < ttlMs) return cached.data;
+    }
+  } catch (e) {}
+  const data = await fetcher();
+  if (data != null) {
+    try { await window.storage.set(key, JSON.stringify({ ts: Date.now(), data }), false); } catch (e) {}
+  }
+  return data;
+}
+
+async function loadApiFootballFixtures(leagueKey) {
+  const afLeagueId = AF_LEAGUE_IDS[leagueKey];
+  if (!afLeagueId) return [];
+  return await afCached(`ml:afFixtures:${leagueKey}`, 6 * 3600 * 1000, async () => {
+    try {
+      const headers = { "x-apisports-key": API_FOOTBALL_KEY };
+      const res = await fetchOddsViaProxies(
+        `https://v3.football.api-sports.io/fixtures?league=${afLeagueId}&season=2026`, { headers }, 8000);
+      const j = res ? await res.json().catch(() => null) : null;
+      if (!Array.isArray(j?.response)) return [];
+      return j.response.map(f => ({
+        id: f.fixture?.id, date: f.fixture?.date,
+        home: f.teams?.home?.name || "", away: f.teams?.away?.name || "",
+      })).filter(f => f.id);
+    } catch (e) { return []; }
+  });
+}
+
+async function getApiFootballFixture(leagueKey, home, away) {
+  const fixtures = await loadApiFootballFixtures(leagueKey);
+  if (!fixtures.length) return null;
+  const direct = fixtures.find(f => isSameClubName(leagueKey, home, f.home) && isSameClubName(leagueKey, away, f.away));
+  if (direct) return { ...direct, swapped: false };
+  const swapped = fixtures.find(f => isSameClubName(leagueKey, home, f.away) && isSameClubName(leagueKey, away, f.home));
+  if (swapped) return { ...swapped, swapped: true };
+  return null;
+}
+
+async function fetchApiFootballLineup(leagueKey, home, away) {
+  if (!AF_LEAGUE_IDS[leagueKey]) return null;
+  const fx = await getApiFootballFixture(leagueKey, home, away);
+  if (!fx) return null;
+  return await afCached(`ml:afLineup:${fx.id}`, 15 * 60 * 1000, async () => {
+    try {
+      const headers = { "x-apisports-key": API_FOOTBALL_KEY };
+      const res = await fetchOddsViaProxies(
+        `https://v3.football.api-sports.io/fixtures/lineups?fixture=${fx.id}`, { headers }, 8000);
+      const j = res ? await res.json().catch(() => null) : null;
+      const teams = j?.response;
+      if (!Array.isArray(teams) || !teams.length) return null;
+      const out = { home: null, away: null };
+      for (const t of teams) {
+        const tn = t.team?.name || "";
+        const side = isSameClubName(leagueKey, home, tn) ? "home" : isSameClubName(leagueKey, away, tn) ? "away" : null;
+        if (!side) continue;
+        out[side] = {
+          formation: t.formation || null,
+          coach: t.coach?.name || null,
+          startXI: (t.startXI || []).map(p => ({
+            name: p.player?.name || "?", number: p.player?.number ?? null, pos: p.player?.pos || null,
+          })),
+          substitutes: (t.substitutes || []).map(p => p.player?.name || "?"),
+        };
+      }
+      if (!out.home && !out.away) return null;
+      return out;
+    } catch (e) { return null; }
+  });
+}
+
+async function fetchApiFootballInjuries(leagueKey, home, away) {
+  if (!AF_LEAGUE_IDS[leagueKey]) return null;
+  const fx = await getApiFootballFixture(leagueKey, home, away);
+  if (!fx) return null;
+  return await afCached(`ml:afInjuries:${fx.id}`, 6 * 3600 * 1000, async () => {
+    try {
+      const headers = { "x-apisports-key": API_FOOTBALL_KEY };
+      const res = await fetchOddsViaProxies(
+        `https://v3.football.api-sports.io/injuries?fixture=${fx.id}`, { headers }, 8000);
+      const j = res ? await res.json().catch(() => null) : null;
+      const rows = j?.response;
+      if (!Array.isArray(rows)) return null;
+      const out = { home: [], away: [] };
+      for (const r of rows) {
+        const tn = r.team?.name || "";
+        const side = isSameClubName(leagueKey, home, tn) ? "home" : isSameClubName(leagueKey, away, tn) ? "away" : null;
+        if (!side) continue;
+        out[side].push({ name: r.player?.name || "?", reason: r.player?.reason || r.player?.type || "결장" });
+      }
+      return out;
+    } catch (e) { return null; }
+  });
+}
+
 async function fetchMatchOdds(leagueKey, home, away) {
   try {
     const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
@@ -1754,6 +1865,86 @@ function OddsComparisonPanel({leagueKey, home, away, modelProbs, onFairProbs}) {
   );
 }
 
+// 2026-07-29 추가: 확정 라인업 + 결장(부상/징계). API-FOOTBALL 무료 100회/일 한도
+// 보호를 위해 자동조회 대신 버튼 클릭 시에만 호출한다(OddsComparisonPanel과 동일 패턴).
+// 지원 리그: laliga/bundesliga/seriea/ligue1/eredivisie/championship (AF_LEAGUE_IDS 참고,
+// MLS/엘리테세리엔은 API-FOOTBALL 리그ID 미확인으로 버튼 자체를 숨김).
+function LineupInjuryPanel({leagueKey, home, away}) {
+  const [lineup, setLineup] = useState(null);
+  const [injuries, setInjuries] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [tried, setTried] = useState(false);
+
+  if (!AF_LEAGUE_IDS[leagueKey]) return null;
+
+  const load = useCallback(async () => {
+    setLoading(true); setTried(true);
+    const [lu, inj] = await Promise.all([
+      fetchApiFootballLineup(leagueKey, home, away),
+      fetchApiFootballInjuries(leagueKey, home, away),
+    ]);
+    setLineup(lu); setInjuries(inj);
+    setLoading(false);
+  }, [leagueKey, home, away]);
+
+  const hasLineup = lineup && (lineup.home?.startXI?.length || lineup.away?.startXI?.length);
+  const hasInjuries = injuries && (injuries.home?.length || injuries.away?.length);
+
+  return (
+    <Card>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+        <div>
+          <div style={{fontSize:12, fontWeight:700, color:T.text}}>👥 확정 라인업 · 결장 정보</div>
+          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>킥오프 1시간 전부터 라인업이 채워집니다 (API-FOOTBALL)</div>
+        </div>
+        <button onClick={load} disabled={loading}
+          style={{fontSize:11, color:"#fff", background: loading?T.dim:T.accent,
+                  border:"none", borderRadius:8, padding:"7px 12px", cursor:loading?"default":"pointer", whiteSpace:"nowrap"}}>
+          {loading ? "조회 중..." : (tried ? "🔄 새로고침" : "라인업 불러오기")}
+        </button>
+      </div>
+
+      {tried && !loading && !hasLineup && !hasInjuries && (
+        <div style={{fontSize:11.5, color:T.gold, marginTop:8}}>
+          아직 확정 라인업/결장 정보가 없습니다 (킥오프 임박 전이거나 매칭 실패).
+        </div>
+      )}
+
+      {hasLineup && (
+        <div style={{marginTop:10, display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
+          {["home","away"].map(side => (
+            <div key={side}>
+              <div style={{fontSize:11, fontWeight:700, color:T.muted, marginBottom:4}}>
+                {side==="home"?home:away} {lineup[side]?.formation ? `(${lineup[side].formation})` : ""}
+              </div>
+              {(lineup[side]?.startXI||[]).map((p,i) => (
+                <div key={i} style={{fontSize:11.5, color:T.text, padding:"2px 0"}}>
+                  {p.number!=null?`${p.number} `:""}{p.name}{p.pos?` (${p.pos})`:""}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {hasInjuries && (
+        <div style={{marginTop:12, paddingTop:8, borderTop:`1px dashed ${T.border}`}}>
+          <div style={{fontSize:11, fontWeight:700, color:T.muted, marginBottom:4}}>🩹 결장(부상·징계)</div>
+          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
+            {["home","away"].map(side => (
+              <div key={side}>
+                {(injuries[side]||[]).map((p,i) => (
+                  <div key={i} style={{fontSize:11.5, color:T.red, padding:"2px 0"}}>{p.name} — {p.reason}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // ============================================================ 예측 결과 공유 카드 (EPL 앱 이식)
 // 로고가 없는 팀(승격팀 등)은 CLUB_ABBR 약어를 원형 배지로 그려서 대체한다.
 function loadImageAsync(src) {
@@ -1909,6 +2100,90 @@ function getH2H(teamA, teamB) {
     else draw++;
   }
   return { games, aWin, draw, bWin, aGF, aGA, total: games.length };
+}
+
+// ── 팀 결장/불투명 인원을 사유별(레드·경고누적·부상)로 파싱 (EPL 앱에서 이식, 2026-07-26) ──
+// TEAM_INJURIES[team].keyOut/injured 문자열("선수명 (사유)")에서 "이번 경기에
+// 실제로 못 뛰는/불투명한" 선수만 사유별로 추출. 사유 텍스트는
+// app_export_multileague.py의 _reason_ko()가 붙여준다(레드카드/출전정지/
+// 각종 부상명/경미한 부상 등).
+function parseTeamAbsences(team) {
+  const inj = (typeof TEAM_INJURIES !== "undefined") ? TEAM_INJURIES[team] : null;
+  const notes = inj ? [...(inj.keyOut || []), ...(inj.injured || [])] : [];
+  const out = { red: [], warn: [], injury: [], doubt: [] };
+  const seen = {}; // 선수명 -> 카테고리(중복 제거, 중증 우선)
+  const sevRank = { red: 3, warn: 2, injury: 1, doubt: 0 };
+  for (const raw of notes) {
+    if (!raw || typeof raw !== "string") continue;
+    const mName = raw.split("(")[0].trim();
+    const reason = (raw.match(/\(([^)]*)\)/)?.[1] || "").trim();
+    const R = reason;
+    if (/(출전가능|복귀 ?예정|복귀\)|복귀중|회복,|선발출전|교체출전|컨디션변수|예방|출전예정)/.test(R)) continue;
+    if (/경고 ?1장/.test(R) && !/누적/.test(R)) continue;
+    let cat = null;
+    if (/(레드카드|퇴장|출전정지|출전 ?정지|정지)/.test(R)) cat = "red";
+    else if (/(경고 ?누적|누적)/.test(R)) cat = "warn";
+    else if (/(대회 ?아웃|대회 ?불참|명단 ?제외|명단교체|결장|골절|파열|수술|ACL|인대|근육|햄스트링|아킬레스|건염|뇌진탕|부상)/.test(R)) {
+      cat = /(불투명|미정|낮음|가능성|의심)/.test(R) ? "doubt" : "injury";
+    } else if (/(불투명|미정|출전여부)/.test(R)) cat = "doubt";
+    if (!cat || !mName) continue;
+    if (seen[mName] && sevRank[seen[mName]] >= sevRank[cat]) continue;
+    if (seen[mName]) {
+      const prev = seen[mName];
+      out[prev] = out[prev].filter(x => x.name !== mName);
+    }
+    seen[mName] = cat;
+    out[cat].push({ name: mName, reason: R });
+  }
+  return out;
+}
+
+function AbsenceSummaryPanel({home, away}) {
+  const teams = [home, away];
+  const data = teams.map(t => ({ team: t, abs: parseTeamAbsences(t) }));
+  const anyAbs = data.some(d => d.abs.red.length || d.abs.warn.length || d.abs.injury.length || d.abs.doubt.length);
+  if (!anyAbs) return null;
+  const catMeta = [
+    { key: "red", icon: "🟥", label: "레드/출전정지" },
+    { key: "warn", icon: "🟨", label: "경고누적 결장" },
+    { key: "injury", icon: "🤕", label: "부상 결장" },
+    { key: "doubt", icon: "❓", label: "출전 불투명" },
+  ];
+  return (
+    <Card>
+      <div style={{fontSize:12.5, fontWeight:700, color:T.text, marginBottom:2}}>🚑 결장·출전 불투명 인원</div>
+      <div style={{fontSize:10.5, color:T.muted, marginBottom:8}}>경고누적·부상·레드카드 등으로 이 경기 결장/불투명한 주요 선수</div>
+      <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12}}>
+        {data.map(({team, abs}) => {
+          const total = abs.red.length + abs.warn.length + abs.injury.length + abs.doubt.length;
+          return (
+            <div key={team}>
+              <div style={{fontSize:12.5, fontWeight:800, color:T.cyan, marginBottom:6}}>
+                <TeamCrest name={team}/> {team} <span style={{color:T.muted, fontWeight:600}}>· {total}명</span>
+              </div>
+              {total === 0 ? (
+                <div style={{fontSize:11.5, color:T.muted}}>보고된 결장 없음</div>
+              ) : catMeta.map(cm => abs[cm.key].length ? (
+                <div key={cm.key} style={{marginBottom:6}}>
+                  <div style={{fontSize:10.5, color:T.muted, marginBottom:2}}>{cm.icon} {cm.label}</div>
+                  {abs[cm.key].map((p,i) => (
+                    <div key={i} style={{fontSize:11.5, color:T.text, lineHeight:1.5}}>
+                      · <b>{p.name}</b>
+                      <span style={{color:T.muted, fontSize:10.5}}>{p.reason ? ` (${p.reason})` : ""}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null)}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{fontSize:10.5, color:T.muted, marginTop:8, lineHeight:1.5}}>
+        API-Football 부상 피드 기준(레드카드/출전정지 사유 구분은 2026-07-26부터 반영).
+        승률 보정 자체는 사유와 무관하게 핵심결장 -6%p/로테이션 -2%p(팀 합산 상한 -28%p)로 계산됩니다.
+      </div>
+    </Card>
+  );
 }
 
 function H2HCard({ teamA, teamB }) {
@@ -2106,6 +2381,8 @@ function PredictTab({ leagueKey, pendingMatch }) {
           <CollapsibleSection title="🔍 예측 근거 & 상대전적">
             <TeamStyleRadarCard leagueKey={leagueKey} home={home} away={away}/>
 
+            <AbsenceSummaryPanel home={home} away={away}/>
+
             <PredictionExplainCard home={home} away={away} result={result}/>
 
             <LiveInPlayPanel home={home} away={away} lambdaHome={result.lambdaHome} lambdaAway={result.lambdaAway}/>
@@ -2204,6 +2481,8 @@ function PredictTab({ leagueKey, pendingMatch }) {
           <OddsComparisonPanel leagueKey={leagueKey} home={home} away={away}
             modelProbs={{home: result.homeWinProb, draw: result.drawProb, away: result.awayWinProb}}
             onFairProbs={setMarketFairProbs}/>
+
+          <LineupInjuryPanel leagueKey={leagueKey} home={home} away={away}/>
 
           <ShareResultPanel leagueKey={leagueKey} home={home} away={away} result={result}/>
 
@@ -3320,6 +3599,17 @@ function LeaderboardTab({ leagueKey }) {
           ))}
         </div>
       </Card>
+      {leagueKey === "mls" && metric === "assists" && (
+        <Card style={{marginTop:10}}>
+          <div style={{fontSize:11.5, color:T.muted, lineHeight:1.6}}>
+            ⚠️ MLS는 리그 고유 규정으로 <b style={{color:T.text}}>"세컨더리 어시스트"</b>(도움으로
+            이어진 패스의 직전 패스도 도움 인정)를 공식 집계에 포함하는데, 이 앱의 데이터 소스는
+            골당 도움 1명만 기록해서 이 부분이 반영되지 않습니다. 그래서 이 순위가 mlssoccer.com
+            공식 도움왕 순위보다 낮게 나올 수 있어요(예: 2026-07 기준 실제 1위와 최대 4개 차이
+            확인됨). 다른 리그는 이 규정이 없어서 영향 없습니다.
+          </div>
+        </Card>
+      )}
       <Card>
         {rows.length === 0 ? (
           <div style={{fontSize:12.5, color:T.muted, textAlign:"center", padding:"12px 0"}}>
