@@ -554,6 +554,285 @@ let TRANSFERS = {};
 // H2H: EPL 앱과 동일 구조 — { "팀A|||팀B"(가나다순): [{home,away,homeGoals,awayGoals,date}, ...] }
 let H2H = {};
 
+// ══════════════════════════════════════════════════════════════
+// 2026-07-29 EPL 앱에서 이식: 개인기여도(playerImpactPct) 엔진 전체.
+// TEAM_GROUP_GAMES는 PIPELINE_DATA_{LEAGUE}.teamGroupGames에서 채워짐
+// (loadPipelineDataMultileague에서 배선 — 아래 참고). STAR_PLAYERS/
+// BACKUP_SEED(GK 리더보드)는 EPL 전용이라 8개리그엔 없음 — 코드 안에서
+// typeof 체크로 안전하게 방어됨(없으면 그냥 그 보정만 스킵, 에러 없음).
+let TEAM_GROUP_GAMES = {};
+// 개인 능력치 기반 결장 영향 시스템
+// 각 선수의 조별리그 3경기 지표를 합산·가중해 "기여도 점수"를 매기고,
+// 팀 내 비중(공격/수비 각각)으로 환산 → 결장 시 그 비중만큼 팀 λ를 차등 조정.
+// (메시 결장 = 큰 하락, 벤치 자원 결장 = 미미)
+// ══════════════════════════════════════════════════════════════
+
+// 한 팀의 선수별 "경기 로그 배열"을 이름별로 모은다(합산하지 않음).
+// 결과: { 선수명: { name, pos, games:[ {경기별 스탯}, ... ] } }
+function aggregateTeamPlayers(team) {
+  const src = (typeof TEAM_GROUP_GAMES !== "undefined") ? TEAM_GROUP_GAMES[team] : null;
+  const perGame = []; // 각 원소 = 한 경기의 선수 배열
+  if (src) {
+    for (const label in src) if (Array.isArray(src[label]) && src[label].length) perGame.push(src[label]);
+  }
+  // TEAM_GROUP_GAMES에 없으면 STATIC_MATCH_STATS에서라도 찾는다(구 데이터 호환)
+  if (!perGame.length) {
+    for (const key in STATIC_MATCH_STATS) {
+      const m = STATIC_MATCH_STATS[key]; if (!m) continue;
+      const [h, a] = key.split("_");
+      if (h === team) { const g = (m.homeGames && m.defaultGame) ? m.homeGames[m.defaultGame] : m.home; if (g && g.length) perGame.push(g); }
+      if (a === team) { const g = (m.awayGames && m.defaultGame) ? m.awayGames[m.defaultGame] : m.away; if (g && g.length) perGame.push(g); }
+    }
+  }
+  const num = v => (typeof v === "number" && !isNaN(v)) ? v : 0;
+  const acc = {};
+  for (const gameArr of perGame) {
+    for (const p of gameArr) {
+      if (!p || !p.name) continue;
+      if (!acc[p.name]) acc[p.name] = { name: p.name, pos: p.pos || "MF", games: [] };
+      if (p.pos) acc[p.name].pos = p.pos;
+      acc[p.name].games.push({
+        goals:num(p.goals), assists:num(p.assists), shots:num(p.shots), sot:num(p.sot),
+        xg:num(p.xg), xa:num(p.xa), icp:num(p.icp), tackles:num(p.tackles), clr:num(p.clr),
+      });
+    }
+  }
+  return Object.values(acc);
+}
+
+// 한 경기 스탯 → 공격/수비 원점수(포지션 가중 전).
+function gameRawScore(g) {
+  const n = v => (typeof v === "number" && !isNaN(v)) ? v : 0; // 없는 지표 0 (하위호환)
+  // ═══ 승부예측 우선 15개 지표 반영 ═══
+  // ── 공격 기여 (atk) ──
+  const atkRaw =
+      n(g.goals)*4.0 + n(g.assists)*3.0
+    + n(g.xg)*2.2                 // 1. xG
+    + n(g.xa)*1.8                 // 2. xA
+    + n(g.progPass)*0.20          // 3. Progressive Passes
+    + n(g.progCarry)*0.25         // 4. Progressive Carries
+    + n(g.sca)*0.35               // 5. SCA (슛 연결 행동)
+    + n(g.gca)*1.2                // 6. GCA (득점 연결 행동)
+    + n(g.bigChances)*1.0         // 8. Big Chances (창출)
+    + n(g.keyPasses)*0.5          // 9. Key Passes
+    + (n(g.takeOnPct)/100)*n(g.takeOns)*0.4  // 14. Take-on Success% × 시도
+    + n(g.sot)*0.4 + n(g.shots)*0.15
+    - n(g.turnovers)*0.25;        // 턴오버 감점
+  // ── 수비 기여 (def) ──
+  const defRaw =
+      n(g.tacklesWon)*0.6         // 10. Tackles Won (성공 태클 우선)
+    + n(g.tackles)*0.3            //     (총 태클은 보조)
+    + n(g.interceptions)*0.55     // 11. Interceptions
+    + n(g.recoveries)*0.20        // 12. Recoveries (볼 회수)
+    + (n(g.aerialWinPct)/100)*0.8 // 13. Aerial Win% (0~100 → 0~0.8)
+    + n(g.psxgGA)*1.5             // 7. PSxG-GA (GK 막은 기대실점)
+    + n(g.icp)*0.5 + n(g.clr)*0.35
+    + n(g.pressSucc)*0.10 + (n(g.pressSuccPct)/100)*1.5; // 압박(횟수/성공률)
+  return { atk: atkRaw, def: defRaw };
+}
+
+// 선수의 공격/수비 기여도 = (경기당 평균) × (일관성).  [평균 × 일관성 반반]
+// 일관성 = 1 - 변동계수(CV)를 0~1로 클램프. CV = 표준편차/평균.
+//   · 매 경기 비슷 → CV↓ → 일관성↑
+//   · 한 경기만 반짝 → CV↑ → 일관성↓
+// 최종점수 = 평균 × (0.5 + 0.5×일관성)  → 평균과 꾸준함을 반반 반영.
+// 교체/1경기 표본도 평균 그대로 살리되(꾸준하면 표시됨), 표본 1개는 일관성 판단 불가로 중립(0.7) 적용.
+function consistency(vals) {
+  const n = vals.length;
+  if (n <= 1) return 0.7; // 표본 1개: 중립(과도하게 깎지 않음)
+  const mean = vals.reduce((a,b)=>a+b,0)/n;
+  if (mean <= 0) return 0.5;
+  const varc = vals.reduce((a,b)=>a+(b-mean)*(b-mean),0)/n;
+  const cv = Math.sqrt(varc)/mean;         // 변동계수
+  return Math.max(0, Math.min(1, 1 - cv/1.5)); // CV 1.5 이상이면 일관성 0
+}
+function playerContribScore(p) {
+  const games = p.games && p.games.length ? p.games : [{atk:0,def:0}];
+  const atkArr = games.map(g => gameRawScore(g).atk);
+  const defArr = games.map(g => gameRawScore(g).def);
+  const mean = arr => arr.reduce((a,b)=>a+b,0)/arr.length;
+  const atkMean = mean(atkArr), defMean = mean(defArr);
+  const atkScore = atkMean * (0.5 + 0.5*consistency(atkArr));
+  const defScore = defMean * (0.5 + 0.5*consistency(defArr));
+  // 포지션 가중
+  const pos = (p.pos || "MF").toUpperCase();
+  let atkW = 1, defW = 1;
+  if (pos === "FW") { atkW = 1.15; defW = 0.5; }
+  else if (pos === "MF") { atkW = 1.0; defW = 0.85; }
+  else if (pos === "DF") { atkW = 0.75; defW = 1.2; }
+  else if (pos === "GK") { atkW = 0.0; defW = 0.6; }
+  return { atk: atkScore * atkW, def: defScore * defW };
+}
+
+// ── GK 능력치: 리더보드(선방·클린시트·출전)에서 팀별 주전 GK를 찾아 0~1 점수화 ──
+// 클린시트 + 선방수 조합. 약팀 GK가 선방만 많아 과대평가되는 걸 막기 위해
+// 클린시트율을 크게, 선방수를 보조로. (요청: 클린시트+선방 조합)
+function getTeamGkRating(team) {
+  try {
+    const lb = (typeof BACKUP_SEED !== "undefined" && BACKUP_SEED.leaderboard && BACKUP_SEED.leaderboard.gk) ? BACKUP_SEED.leaderboard.gk : null;
+    if (!lb) return null;
+    // "이름|국가" 키에서 해당 팀 GK 중 출전수 최다(주전) 1명 선택
+    let best = null;
+    for (const key in lb) {
+      const parts = key.split("|");
+      if (parts[1] !== team) continue;
+      const v = lb[key];
+      if (!best || (v.apps||0) > (best.apps||0) || ((v.apps||0)===(best.apps||0) && (v.saves||0)>(best.saves||0))) {
+        best = { name: parts[0], saves: v.saves||0, cs: v.cs||0, apps: v.apps||0 };
+      }
+    }
+    if (!best || best.apps <= 0) return null;
+    const csRate = best.cs / best.apps;              // 클린시트율 0~1
+    const savesPerGame = best.saves / best.apps;     // 경기당 선방
+    // 조합: 클린시트율 0.65 + 선방(경기당 5개=만점 가정) 0.35
+    const rating = Math.max(0, Math.min(1, csRate*0.65 + Math.min(1, savesPerGame/5)*0.35));
+    return { name: best.name, rating, csRate, savesPerGame, apps: best.apps };
+  } catch(e) { return null; }
+}
+
+// 팀의 선수별 공격/수비 비중(팀 합 대비 0~1)을 매핑으로 반환.
+// GK는 필드 스탯이 빈약하므로 리더보드 기반 GK 능력치를 수비 비중에 별도 주입.
+// 결과: { 선수명: {atkShare, defShare, atk, def, pos, isGk} }
+const __teamShareCache = {};
+function getTeamShares(team) {
+  if (__teamShareCache[team]) return __teamShareCache[team];
+  const players = aggregateTeamPlayers(team);
+  const gk = getTeamGkRating(team);
+  let totAtk = 0, totDef = 0;
+  const scored = players.map(p => {
+    const s = playerContribScore(p);
+    totAtk += s.atk; totDef += s.def;
+    return { name: p.name, pos: p.pos, atk: s.atk, def: s.def };
+  });
+  const map = {};
+  for (const s of scored) {
+    map[s.name] = {
+      pos: s.pos,
+      atk: s.atk, def: s.def,
+      atkShare: totAtk > 0 ? s.atk / totAtk : 0,
+      defShare: totDef > 0 ? s.def / totDef : 0,
+      isGk: (s.pos||"").toUpperCase()==="GK",
+    };
+  }
+  // GK 능력치 주입: 명단에 해당 GK가 있으면 그 선수에, 없으면 명단의 GK 포지션 첫 선수에 반영
+  if (gk) {
+    let target = map[gk.name] ? gk.name : Object.keys(map).find(n => map[n].isGk);
+    if (target) { map[target].gkRating = gk.rating; map[target].isGk = true; }
+  }
+  __teamShareCache[team] = map;
+  return map;
+}
+
+// ── 선수 등급 판정 + 결장 시 승률 보정폭(가이드 기반 상한 캡) ──
+// 가이드:
+//   에이스 공격수 4~6% / 주전 GK 3~5% / 핵심 MF 2~4% / 핵심 CB 2~3% / 일반 주전 1~2% / 백업 0~1%
+// 팀 내 비중(share)으로 팀 안에서의 상대적 중요도를 재고, 포지션별 상한 안에서 스케일.
+function playerImpactPct(team, name) {
+  const map = getTeamShares(team);
+  const info = map[name];
+  if (!info) return 0;
+  const pos = (info.pos || "MF").toUpperCase();
+  const atkS = info.atkShare || 0;
+  const defS = info.defShare || 0;
+
+  // GK: 리더보드 능력치(0~1)로 3~5% 범위 스케일. 데이터 없으면 주전 GK 기본 3.5%.
+  if (pos === "GK") {
+    const r = (typeof info.gkRating === "number") ? info.gkRating : 0.5;
+    return 3 + r * 2; // 3~5%
+  }
+
+  // 필드 플레이어: 공격 비중과 수비 비중 중 큰 역할을 기준으로 등급 상한 설정
+  let cap, base, share;
+  if (pos === "FW") {            // 공격수: 공격 비중 기준, 상한 6%
+    share = atkS; cap = 6; base = 1;
+  } else if (pos === "MF") {     // 미드필더: 공격+수비 혼합, 상한 4%
+    share = atkS*0.6 + defS*0.4; cap = 4; base = 1;
+  } else if (pos === "DF") {     // 수비수: 수비 비중 기준, 상한 3%
+    share = defS*0.7 + atkS*0.3; cap = 3; base = 0.8;
+  } else {
+    share = atkS*0.5 + defS*0.5; cap = 3; base = 0.8;
+  }
+  // 팀 내 최상위(share≈팀 최고)면 상한, 낮으면 base 근처로. share는 대략 0~0.5 범위이므로 2배 스케일.
+  const scaled = base + Math.min(1, share * 2) * (cap - base);
+  return Math.max(0, Math.min(cap, scaled)); // 0~cap %
+}
+
+// 상위 기여 선수(패널 표시용): 결장 시 승률 영향(%) 순. GK는 주전 1명만.
+function getKeyPlayers(team) {
+  const map = getTeamShares(team);
+  let gkKept = false;
+  return Object.keys(map)
+    .map(n => ({
+      name: n, pos: map[n].pos,
+      atkShare: map[n].atkShare, defShare: map[n].defShare,
+      isGk: (map[n].pos||"").toUpperCase()==="GK",
+      hasGkRating: typeof map[n].gkRating === "number",
+      impactPct: playerImpactPct(team, n),
+    }))
+    .filter(p => p.impactPct > 0.3)
+    .sort((x, y) => {
+      // GK는 리더보드 능력치 있는 주전을 우선
+      return y.impactPct - x.impactPct || (y.hasGkRating?1:0)-(x.hasGkRating?1:0);
+    })
+    .filter(p => {
+      if (!p.isGk) return true;
+      if (gkKept) return false; // 이미 주전 GK 1명 넣었으면 나머지 GK 제외
+      gkKept = true; return true;
+    })
+    .slice(0, 6);
+}
+
+// 결장 선수 전역 상태 (팀명 -> Set(선수명))
+if (typeof window !== "undefined" && !window.__absentPlayers) window.__absentPlayers = {};
+function getAbsentSet(team) {
+  if (typeof window === "undefined") return new Set();
+  return window.__absentPlayers[team] || new Set();
+}
+
+// 결장 선수들의 승률 보정폭 합(%) — 팀 총합은 15%로 캡(가이드: 개인 기여도 최종 10~15%).
+function absentWinPenaltyPct(team) {
+  const absent = getAbsentSet(team);
+  if (!absent.size) return 0;
+  let sum = 0;
+  for (const name of absent) sum += playerImpactPct(team, name);
+  return Math.min(15, sum); // 팀 총 결장 영향 상한 15%p
+}
+
+// 공격/수비 손실 비중(λ 조정용, 패널 정보 표시에도 사용)
+function absentImpact(team) {
+  const absent = getAbsentSet(team);
+  if (!absent.size) return { atkLoss: 0, defLoss: 0, winPct: 0 };
+  const map = getTeamShares(team);
+  let atkLoss = 0, defLoss = 0;
+  for (const name of absent) {
+    if (map[name]) { atkLoss += map[name].atkShare; defLoss += map[name].defShare; }
+  }
+  return { atkLoss, defLoss, winPct: absentWinPenaltyPct(team) };
+}
+
+function starPlayerLambdaBoost(lambdaHome, lambdaAway, home, away) {
+  const hS = (typeof STAR_PLAYERS !== "undefined") ? STAR_PLAYERS[home] : null;
+  const aS = (typeof STAR_PLAYERS !== "undefined") ? STAR_PLAYERS[away] : null;
+  let lH = lambdaHome, lA = lambdaAway;
+  if (hS) lH = lH + (hS.atkBoost || 0);
+  if (aS) lH = Math.max(0.15, lH - (aS.gkSave || 0) * 0.5);
+  if (aS) lA = lA + (aS.atkBoost || 0);
+  if (hS) lA = Math.max(0.15, lA - (hS.gkSave || 0) * 0.5);
+
+  // ── 결장 반영(가이드 강도) ──
+  // 개인 기여도는 최종 승률 보정값으로 10~15%만. 팀 결장 총 페널티(%)를
+  // 공격 λ에 부드럽게 환산: winPct 1%p ≈ 공격 λ 약 1.3% 감소(상한 30%).
+  const hImp = absentImpact(home);
+  const aImp = absentImpact(away);
+  const toLambda = pct => Math.min(0.30, (pct/100) * 1.3);
+
+  if (hImp.winPct > 0) lH = Math.max(0.12, lH * (1 - toLambda(hImp.winPct)));
+  if (aImp.winPct > 0) lA = Math.max(0.12, lA * (1 - toLambda(aImp.winPct)));
+
+  return { lH, lA };
+}
+
+
 // LEADERBOARD: 득점왕/도움왕 — { scorers: {"선수|팀": 골수}, assists: {"선수|팀": 도움수} }.
 // 2026-07-18 신규(EPL 앱의 STATIC_LEADERBOARD와 동일 개념/구조를 6개 리그로 포팅).
 // collect_goalscorers.py가 실제 26-27 시즌 종료 경기에서 뽑은 득점자만 반영하므로,
@@ -614,6 +893,16 @@ async function loadPipelineData(leagueKey) {
          (data.leaderboard.assists && Object.keys(data.leaderboard.assists).length))) {
       LEADERBOARD = data.leaderboard;
       leaderboardLoaded = true;
+    }
+    // TEAM_GROUP_GAMES: 개인기여도(playerImpactPct) 소스 — 2026-07-29 신규 배선.
+    // EPL_index.html의 동일 배선(캐시 클리어 포함)과 정확히 동일 패턴.
+    if (data.teamGroupGames && typeof data.teamGroupGames === "object") {
+      Object.entries(data.teamGroupGames).forEach(([team, gamesByLabel]) => {
+        TEAM_GROUP_GAMES[team] = { ...(TEAM_GROUP_GAMES[team]||{}), ...gamesByLabel };
+      });
+      if (typeof __teamShareCache !== "undefined") {
+        Object.keys(__teamShareCache).forEach(k => delete __teamShareCache[k]);
+      }
     }
     // 선수 능력치 기준선(A단계, 2026-07-22): { "이름|국가": {club_en, position, per90, source, ...} }
     // update_player_baseline()이 출력하는 player_baseline.json의 players 필드를 그대로 받는다.
@@ -1288,6 +1577,14 @@ function computeLambdas(leagueKey, homeName, awayName) {
   const awayPlayer = playerLambdaAdjust(leagueKey, awayName);
   lambdaHome = Math.max(0.15, lambdaHome * homePlayer.factor);
   lambdaAway = Math.max(0.15, lambdaAway * awayPlayer.factor);
+
+  // 2026-07-29 EPL 앱에서 이식: 결장 선수 개인기여도(playerImpactPct) 반영.
+  // 사용자가 결장 선수를 지정하면(AbsenceSummaryPanel → window.__absentPlayers)
+  // starPlayerLambdaBoost가 그 선수의 팀 내 기여 비중만큼 λ를 감소시킨다.
+  // 결장자 없으면 absentImpact()가 {winPct:0}을 반환해서 완전 무효과.
+  const starAdj = starPlayerLambdaBoost(lambdaHome, lambdaAway, homeName, awayName);
+  lambdaHome = starAdj.lH;
+  lambdaAway = starAdj.lA;
 
   return { lambdaHome, lambdaAway, eloDiff, xgBlended, rivalry,
     injuryApplied: inj.homeFactor < 1 || inj.awayFactor < 1,
@@ -2139,18 +2436,76 @@ function parseTeamAbsences(team) {
 }
 
 function AbsenceSummaryPanel({home, away}) {
+  const [, setAbsentTick] = useState(0);
   const teams = [home, away];
   const data = teams.map(t => ({ team: t, abs: parseTeamAbsences(t) }));
   const anyAbs = data.some(d => d.abs.red.length || d.abs.warn.length || d.abs.injury.length || d.abs.doubt.length);
-  if (!anyAbs) return null;
   const catMeta = [
     { key: "red", icon: "🟥", label: "레드/출전정지" },
     { key: "warn", icon: "🟨", label: "경고누적 결장" },
     { key: "injury", icon: "🤕", label: "부상 결장" },
     { key: "doubt", icon: "❓", label: "출전 불투명" },
   ];
+
+  // 2026-07-29 EPL 앱에서 이식: 개인기여도(playerImpactPct) 기반 결장 체크박스.
+  // 위의 API-Football 자동 결장 판정(keyOut/injured 이진, -6%/-2%p)과는 별개
+  // 레이어 — 사용자가 직접 체크하면 TEAM_GROUP_GAMES 기반 개인 기여도(%)로
+  // 더 정밀하게 λ가 조정된다(EPL과 동일하게 팀 합산 상한 15%p).
+  const keyHome = getKeyPlayers(home);
+  const keyAway = getKeyPlayers(away);
+  function toggleAbsent(team, name) {
+    if (typeof window === "undefined") return;
+    if (!window.__absentPlayers[team]) window.__absentPlayers[team] = new Set();
+    const s = window.__absentPlayers[team];
+    if (s.has(name)) s.delete(name); else s.add(name);
+    setAbsentTick(t => t + 1);
+  }
+  function isAbsent(team, name) {
+    if (typeof window === "undefined") return false;
+    return !!(window.__absentPlayers[team] && window.__absentPlayers[team].has(name));
+  }
+  const absentCountH = keyHome.filter(p=>isAbsent(home,p.name)).length;
+  const absentCountA = keyAway.filter(p=>isAbsent(away,p.name)).length;
+  const hasImpactData = keyHome.length > 0 || keyAway.length > 0;
+
+  if (!anyAbs && !hasImpactData) return null;
   return (
     <Card>
+      {hasImpactData && (
+        <div style={{marginBottom:12, padding:"8px", background:"rgba(255,255,255,0.03)", borderRadius:8, border:`1px solid ${T.border}`}}>
+          <div style={{fontSize:11, color:T.dim, marginBottom:6}}>
+            ⭐ 핵심선수(개인기여도) — 체크하면 결장 처리, 팀 합산 최대 -15%p로 승부예측에 즉시 반영
+          </div>
+          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"4px 12px"}}>
+            <div>
+              <div style={{fontSize:10.5, color:T.muted, fontWeight:700, marginBottom:3}}>{home}{absentCountH>0?` (결장 ${absentCountH})`:""}</div>
+              {keyHome.map((p,i)=>(
+                <label key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:11.5, padding:"2px 0", cursor:"pointer",
+                  color: isAbsent(home,p.name) ? T.red : T.text, textDecoration: isAbsent(home,p.name)?"line-through":"none"}}>
+                  <input type="checkbox" checked={isAbsent(home,p.name)} onChange={()=>toggleAbsent(home,p.name)} style={{cursor:"pointer"}}/>
+                  {p.name} <span style={{color:T.dim, fontSize:10}}>(-{p.impactPct.toFixed(1)}%p)</span>
+                </label>
+              ))}
+            </div>
+            <div>
+              <div style={{fontSize:10.5, color:T.muted, fontWeight:700, marginBottom:3}}>{away}{absentCountA>0?` (결장 ${absentCountA})`:""}</div>
+              {keyAway.map((p,i)=>(
+                <label key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:11.5, padding:"2px 0", cursor:"pointer",
+                  color: isAbsent(away,p.name) ? T.red : T.text, textDecoration: isAbsent(away,p.name)?"line-through":"none"}}>
+                  <input type="checkbox" checked={isAbsent(away,p.name)} onChange={()=>toggleAbsent(away,p.name)} style={{cursor:"pointer"}}/>
+                  {p.name} <span style={{color:T.dim, fontSize:10}}>(-{p.impactPct.toFixed(1)}%p)</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {(absentCountH>0||absentCountA>0) && (
+            <div style={{fontSize:10.5, color:T.dim, marginTop:6}}>
+              결장 반영폭 — {home}: -{absentWinPenaltyPct(home).toFixed(1)}%p, {away}: -{absentWinPenaltyPct(away).toFixed(1)}%p · 다시 예측하면 승부예측에 반영됩니다.
+            </div>
+          )}
+        </div>
+      )}
+      {anyAbs && (<>
       <div style={{fontSize:12.5, fontWeight:700, color:T.text, marginBottom:2}}>🚑 결장·출전 불투명 인원</div>
       <div style={{fontSize:10.5, color:T.muted, marginBottom:8}}>경고누적·부상·레드카드 등으로 이 경기 결장/불투명한 주요 선수</div>
       <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12}}>
@@ -2182,6 +2537,7 @@ function AbsenceSummaryPanel({home, away}) {
         API-Football 부상 피드 기준(레드카드/출전정지 사유 구분은 2026-07-26부터 반영).
         승률 보정 자체는 사유와 무관하게 핵심결장 -6%p/로테이션 -2%p(팀 합산 상한 -28%p)로 계산됩니다.
       </div>
+      </>)}
     </Card>
   );
 }
