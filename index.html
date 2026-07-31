@@ -1182,28 +1182,84 @@ async function fetchApiFootballLineup(leagueKey, home, away) {
   });
 }
 
-async function fetchApiFootballInjuries(leagueKey, home, away) {
-  if (!AF_LEAGUE_IDS[leagueKey]) return null;
-  const fx = await getApiFootballFixture(leagueKey, home, away);
-  if (!fx) return null;
-  return await afCached(`ml:afInjuries:${fx.id}`, 6 * 3600 * 1000, async () => {
+// 2026-07-31 추가: ESPN 리그별 부상자(비공식 API, 공식문서 없음 — pseudo-r/
+// Public-ESPN-API 커뮤니티 검증자료 기준). eng.1=EPL이 이미 확인됐던 것과 동일한
+// {국가코드}.1 패턴, 챔피언십만 2부라 eng.2. 엘리테세리엔(노르웨이)은 정확한
+// 슬러그를 확인 못 해서 제외(추측 안 함 — 첫 실행 로그로 나머지도 검증 필요).
+const ESPN_LEAGUE_SLUGS = {
+  laliga: 'esp.1', bundesliga: 'ger.1', seriea: 'ita.1', ligue1: 'fra.1',
+  eredivisie: 'ned.1', championship: 'eng.2', mls: 'usa.1',
+};
+
+async function fetchEspnInjuriesForLeague(leagueKey) {
+  const slug = ESPN_LEAGUE_SLUGS[leagueKey];
+  if (!slug) return null;
+  return await afCached(`ml:espnInjuries:${leagueKey}`, 6 * 3600 * 1000, async () => {
     try {
-      const headers = { "x-apisports-key": API_FOOTBALL_KEY };
-      const res = await fetchOddsViaProxies(
-        `https://v3.football.api-sports.io/injuries?fixture=${fx.id}`, { headers }, 8000);
+      const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/injuries`;
+      const res = await fetchOddsViaProxies(url, {}, 8000);
       const j = res ? await res.json().catch(() => null) : null;
-      const rows = j?.response;
-      if (!Array.isArray(rows)) return null;
-      const out = { home: [], away: [] };
-      for (const r of rows) {
-        const tn = r.team?.name || "";
-        const side = isSameClubName(leagueKey, home, tn) ? "home" : isSameClubName(leagueKey, away, tn) ? "away" : null;
-        if (!side) continue;
-        out[side].push({ name: r.player?.name || "?", reason: r.player?.reason || r.player?.type || "결장" });
+      const teams = j?.injuries;
+      if (!Array.isArray(teams) || !teams.length) return null;
+      const byTeam = {};
+      for (const t of teams) {
+        const teamEspnName = t.displayName || t.team?.displayName || t.team?.name || '';
+        if (!teamEspnName) continue;
+        for (const entry of (t.injuries || [])) {
+          const name = entry.athlete?.displayName || entry.athlete?.name;
+          if (!name) continue;
+          const reason = entry.details?.type || entry.details?.detail || entry.status || '결장';
+          if (!byTeam[teamEspnName]) byTeam[teamEspnName] = [];
+          byTeam[teamEspnName].push({ name, reason });
+        }
       }
-      return out;
+      return byTeam;
     } catch (e) { return null; }
   });
+}
+
+async function fetchApiFootballInjuries(leagueKey, home, away) {
+  if (AF_LEAGUE_IDS[leagueKey]) {
+    const fx = await getApiFootballFixture(leagueKey, home, away);
+    if (fx) {
+      const result = await afCached(`ml:afInjuries:${fx.id}`, 6 * 3600 * 1000, async () => {
+        try {
+          const headers = { "x-apisports-key": API_FOOTBALL_KEY };
+          const res = await fetchOddsViaProxies(
+            `https://v3.football.api-sports.io/injuries?fixture=${fx.id}`, { headers }, 8000);
+          const j = res ? await res.json().catch(() => null) : null;
+          // 2026-07-31 수정: 계정정지 등이어도 HTTP 200+빈배열을 주는 API-Football
+          // 특유의 패턴(EPL 앱에서 실측 확인된 것과 동일) — errors 필드 먼저 체크.
+          const afErrors = j?.errors;
+          const hasAfErrors = afErrors && (Array.isArray(afErrors) ? afErrors.length > 0 : Object.keys(afErrors).length > 0);
+          const rows = j?.response;
+          if (hasAfErrors || !Array.isArray(rows) || !rows.length) return null;
+          const out = { home: [], away: [], source: 'API-Football' };
+          for (const r of rows) {
+            const tn = r.team?.name || "";
+            const side = isSameClubName(leagueKey, home, tn) ? "home" : isSameClubName(leagueKey, away, tn) ? "away" : null;
+            if (!side) continue;
+            out[side].push({ name: r.player?.name || "?", reason: r.player?.reason || r.player?.type || "결장" });
+          }
+          return (out.home.length || out.away.length) ? out : null;
+        } catch (e) { return null; }
+      });
+      if (result) return result;
+    }
+  }
+  // 2026-07-31 추가: API-Football 실패/미지원(MLS 등) → ESPN 폴백
+  const byTeam = await fetchEspnInjuriesForLeague(leagueKey);
+  if (byTeam) {
+    const out = { home: [], away: [], source: 'ESPN' };
+    for (const [espnTeamName, list] of Object.entries(byTeam)) {
+      const side = isSameClubName(leagueKey, home, espnTeamName) ? "home"
+                 : isSameClubName(leagueKey, away, espnTeamName) ? "away" : null;
+      if (!side) continue;
+      out[side].push(...list);
+    }
+    if (out.home.length || out.away.length) return out;
+  }
+  return null;
 }
 
 async function fetchMatchOdds(leagueKey, home, away) {
@@ -2320,15 +2376,17 @@ function OddsComparisonPanel({leagueKey, home, away, modelProbs, onFairProbs}) {
 
 // 2026-07-29 추가: 확정 라인업 + 결장(부상/징계). API-FOOTBALL 무료 100회/일 한도
 // 보호를 위해 자동조회 대신 버튼 클릭 시에만 호출한다(OddsComparisonPanel과 동일 패턴).
-// 지원 리그: laliga/bundesliga/seriea/ligue1/eredivisie/championship (AF_LEAGUE_IDS 참고,
-// MLS/엘리테세리엔은 API-FOOTBALL 리그ID 미확인으로 버튼 자체를 숨김).
+// 2026-07-31 수정: 부상자 정보는 API-Football 실패 시 ESPN으로 자동 폴백되므로,
+// ESPN이 커버하는 리그(MLS 포함)까지 패널을 보여준다. 단 라인업(startXI)은 아직
+// API-Football 전용이라 AF 미지원 리그는 부상자만 나오고 라인업 칸은 비어있을 수 있음
+// (엘리테세리엔은 AF도 ESPN도 슬러그 미확인이라 여전히 버튼 자체가 숨겨짐).
 function LineupInjuryPanel({leagueKey, home, away}) {
   const [lineup, setLineup] = useState(null);
   const [injuries, setInjuries] = useState(null);
   const [loading, setLoading] = useState(false);
   const [tried, setTried] = useState(false);
 
-  if (!AF_LEAGUE_IDS[leagueKey]) return null;
+  if (!AF_LEAGUE_IDS[leagueKey] && !ESPN_LEAGUE_SLUGS[leagueKey]) return null;
 
   const load = useCallback(async () => {
     setLoading(true); setTried(true);
@@ -2342,13 +2400,14 @@ function LineupInjuryPanel({leagueKey, home, away}) {
 
   const hasLineup = lineup && (lineup.home?.startXI?.length || lineup.away?.startXI?.length);
   const hasInjuries = injuries && (injuries.home?.length || injuries.away?.length);
+  const injurySourceLabel = injuries?.source || "API-FOOTBALL/ESPN";
 
   return (
     <Card>
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
         <div>
           <div style={{fontSize:12, fontWeight:700, color:T.text}}>👥 확정 라인업 · 결장 정보</div>
-          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>킥오프 1시간 전부터 라인업이 채워집니다 (API-FOOTBALL)</div>
+          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>킥오프 1시간 전부터 라인업이 채워집니다 ({injurySourceLabel})</div>
         </div>
         <button onClick={load} disabled={loading}
           style={{fontSize:11, color:"#fff", background: loading?T.dim:T.accent,
