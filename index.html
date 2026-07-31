@@ -1061,6 +1061,48 @@ function computeEV(modelProb, fairOdds) {
 
 const ODDS_API_IO_KEY = "15f21084ebc711d691cdc3e9d1b20943c8ff66bccdf563609f8c872c2b7a320a"; // EPL 앱과 동일한 실제 키로 교체 (2026-07-16)
 
+// ============================================================ BSD 배당 (2026-07-31 추가, 1순위)
+// EPL 앱과 동일 원칙 — 공식 OpenAPI 스펙(football-schema.json)으로 필드명 확인됨
+// (추측 아님). outcome이 팀명이 아니라 HOME/DRAW/AWAY 코드라서 odds-api.io/
+// the-odds-api처럼 팀명 fuzzy 매칭이 필요없다. SCHEDULE의 g.id가 이 경기의 BSD
+// event_id 그대로라 매칭이 애매할 수가 없음.
+// ⚠️ BSD 공식 페이지에 "배당 기능 자체를 없앨지 고민 중"이라는 경고가 떠있었음
+// (2026-07-31 확인) — 실패해도 기존 odds-api.io/the-odds-api 체인으로 자연스럽게
+// 폴백되도록 설계.
+const BSD_TOKEN = "915637d205da377a1add1ec042081a4633cb8395"; // EPL 앱과 동일한 실제 토큰
+
+function findScheduleEventId(leagueKey, home, away) {
+  const g = (SCHEDULE || []).find(m =>
+    (isSameClubName(leagueKey, home, m.home) && isSameClubName(leagueKey, away, m.away)) ||
+    (isSameClubName(leagueKey, home, m.away) && isSameClubName(leagueKey, away, m.home)));
+  if (!g || g.id == null) return null;
+  return { id: g.id, swapped: !isSameClubName(leagueKey, home, g.home) };
+}
+
+async function fetchBsdBookmakerOdds(eventId) {
+  if (!BSD_TOKEN || eventId == null) return [];
+  try {
+    const url = `https://sports.bzzoiro.com/api/v2/odds/?event_id=${eventId}&market=1x2&limit=200`;
+    const res = await fetchOddsViaProxies(url, { headers: { "Authorization": `Token ${BSD_TOKEN}` } }, 8000);
+    const j = res ? await res.json().catch(() => null) : null;
+    const rows = Array.isArray(j) ? j : (Array.isArray(j?.results) ? j.results : null);
+    if (!Array.isArray(rows) || !rows.length) return [];
+    const byBookmaker = {};
+    for (const r of rows) {
+      if (r.market !== "1x2") continue;
+      const slug = r.bookmaker_slug;
+      if (!slug || slug === "consensus") continue;
+      if (!byBookmaker[slug]) byBookmaker[slug] = { bookmaker: r.bookmaker_name || slug };
+      if (r.outcome === "HOME") byBookmaker[slug].home = r.decimal_odds;
+      else if (r.outcome === "DRAW") byBookmaker[slug].draw = r.decimal_odds;
+      else if (r.outcome === "AWAY") byBookmaker[slug].away = r.decimal_odds;
+    }
+    return Object.values(byBookmaker).filter(b => b.home != null && b.draw != null && b.away != null);
+  } catch (e) {
+    return [];
+  }
+}
+
 // ── CORS 프록시 폴백 (EPL 앱에서 이식, 2026-07-26) ──────────────────────
 // 문제: odds-api.io를 fetch()로 직접 호출하면 브라우저 CORS 정책에 막혀 매번
 // 조용히 실패했음(catch에서 삼켜져서 에러도 안 보였음) — 그래서 "배당 데이터를
@@ -1263,6 +1305,22 @@ async function fetchApiFootballInjuries(leagueKey, home, away) {
 }
 
 async function fetchMatchOdds(leagueKey, home, away) {
+  const sched = findScheduleEventId(leagueKey, home, away);
+  if (sched) {
+    try {
+      const bsdRows = await fetchBsdBookmakerOdds(sched.id);
+      if (bsdRows.length) {
+        const best = bsdRows[0];
+        return {
+          home: sched.swapped ? best.away : best.home,
+          draw: best.draw,
+          away: sched.swapped ? best.home : best.away,
+          source: `BSD(${best.bookmaker})`,
+        };
+      }
+    } catch (e) { /* 다음 소스로 */ }
+  }
+
   try {
     const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
     const res = await fetchOddsViaProxies(evUrl, {}, 6000);
@@ -2254,6 +2312,20 @@ function extractAllBookmakerOddsFromTheOddsApi(leagueKey, home, away, events) {
 
 async function fetchAllBookmakerOdds(leagueKey, home, away) {
   const results = [];
+
+  // 2026-07-31 추가: BSD 1순위(팀명매칭 불필요)
+  const sched = findScheduleEventId(leagueKey, home, away);
+  if (sched) {
+    try {
+      const bsdRows = await fetchBsdBookmakerOdds(sched.id);
+      for (const r of bsdRows) {
+        results.push(sched.swapped
+          ? { bookmaker: `BSD·${r.bookmaker}`, home: r.away, draw: r.draw, away: r.home }
+          : { bookmaker: `BSD·${r.bookmaker}`, home: r.home, draw: r.draw, away: r.away });
+      }
+    } catch (e) { /* 다음 소스로 */ }
+  }
+
   try {
     const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
     const res = await fetchOddsViaProxies(evUrl, {}, 8000);
