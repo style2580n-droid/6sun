@@ -1210,32 +1210,44 @@ async function fetchMatchOdds(leagueKey, home, away) {
   try {
     const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
     const res = await fetchOddsViaProxies(evUrl, {}, 6000);
-    if (!res) return null;
-    const events = await res.json().catch(() => null);
-    const list = Array.isArray(events) ? events : (Array.isArray(events?.data) ? events.data : null);
-    if (!Array.isArray(list)) return null;
+    if (res) {
+      const events = await res.json().catch(() => null);
+      const list = Array.isArray(events) ? events : (Array.isArray(events?.data) ? events.data : null);
+      if (Array.isArray(list)) {
+        const direct = list.find(ev => isSameClubName(leagueKey, home, ev.home) && isSameClubName(leagueKey, away, ev.away));
+        const swapped = direct ? null : list.find(ev => isSameClubName(leagueKey, home, ev.away) && isSameClubName(leagueKey, away, ev.home));
+        const match = direct || swapped;
+        if (match) {
+          const oddsUrl = `https://api.odds-api.io/v3/odds?apiKey=${ODDS_API_IO_KEY}&eventId=${match.id}`;
+          const oddsRes = await fetchOddsViaProxies(oddsUrl, {}, 6000);
+          if (oddsRes) {
+            const oddsData = await oddsRes.json().catch(() => null);
+            const bk = oddsData?.bookmakers?.[0] || oddsData?.data?.bookmakers?.[0];
+            const markets = bk?.markets || bk?.odds || [];
+            const h2h = Array.isArray(markets) ? markets.find(m => m.key === "h2h" || m.name === "1X2") : null;
+            if (h2h && Array.isArray(h2h.outcomes)) {
+              const oh = h2h.outcomes.find(o => isSameClubName(leagueKey, home, o.name))?.price;
+              const od = h2h.outcomes.find(o => /^draw$/i.test(o.name || ""))?.price;
+              const oa = h2h.outcomes.find(o => isSameClubName(leagueKey, away, o.name))?.price;
+              if (oh && od && oa) return { home: oh, draw: od, away: oa, source: "odds-api.io" };
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { /* the-odds-api.com으로 폴백 */ }
 
-    const direct = list.find(ev => isSameClubName(leagueKey, home, ev.home) && isSameClubName(leagueKey, away, ev.away));
-    const swapped = direct ? null : list.find(ev => isSameClubName(leagueKey, home, ev.away) && isSameClubName(leagueKey, away, ev.home));
-    const match = direct || swapped;
-    if (!match) return null;
+  // 2026-07-31 추가: odds-api.io가 못 준 경우(주로 마이너리그) the-odds-api.com으로 보강.
+  try {
+    const events = await fetchTheOddsEventsForLeague(leagueKey);
+    const rows = extractAllBookmakerOddsFromTheOddsApi(leagueKey, home, away, events);
+    if (rows.length) {
+      const r = rows[0];
+      return { home: r.home, draw: r.draw, away: r.away, source: `the-odds-api(${r.bookmaker})` };
+    }
+  } catch (e) { /* 무시 */ }
 
-    const oddsUrl = `https://api.odds-api.io/v3/odds?apiKey=${ODDS_API_IO_KEY}&eventId=${match.id}`;
-    const oddsRes = await fetchOddsViaProxies(oddsUrl, {}, 6000);
-    if (!oddsRes) return null;
-    const oddsData = await oddsRes.json().catch(() => null);
-    const bk = oddsData?.bookmakers?.[0] || oddsData?.data?.bookmakers?.[0];
-    const markets = bk?.markets || bk?.odds || [];
-    const h2h = Array.isArray(markets) ? markets.find(m => m.key === "h2h" || m.name === "1X2") : null;
-    if (!h2h || !Array.isArray(h2h.outcomes)) return null;
-    const oh = h2h.outcomes.find(o => isSameClubName(leagueKey, home, o.name))?.price;
-    const od = h2h.outcomes.find(o => /^draw$/i.test(o.name || ""))?.price;
-    const oa = h2h.outcomes.find(o => isSameClubName(leagueKey, away, o.name))?.price;
-    if (!oh || !od || !oa) return null;
-    return { home: oh, draw: od, away: oa, source: "odds-api.io" };
-  } catch (e) {
-    return null;
-  }
+  return null;
 }
 
 
@@ -2094,28 +2106,128 @@ function extractAllBookmakerOddsFromOddsApiIo(leagueKey, home, away, data, swapp
   return out;
 }
 
+// ============================================================ The Odds API 이식 (2026-07-31 추가)
+// odds-api.io 무료플랜은 "북메이커 2곳"만 주는 구조라, MLS·엘리테세리엔처럼 마이너
+// 리그는 애초에 그 2곳이 마켓을 안 열어놨을 가능성이 높다(실사용 중 계속 "못 찾음"으로
+// 확인됨). the-odds-api.com은 공식 스포츠 목록에 Eliteserien·MLS 둘 다 명시돼 있어서
+// (2026-07-31 웹검색으로 확인) 보강 소스로 추가한다. 단 무료플랜이 월 500콜(odds-api.io
+// 일 500콜보다 훨씬 빡빡)이라 캐시를 길게 잡는다.
+// ⚠️ sport_key 정확한 문자열(예: "soccer_norway_eliteserien")은 공식 문서 직접 접근이
+// 안 돼서 확정 못 함 — 이 프로젝트 전체 원칙(리그ID 숫자/문자열 추측 금지, 실제 응답으로
+// 검증)과 동일하게, /v4/sports를 실제로 불러서 title 패턴매칭으로 역발견한다. 매칭
+// 애매하면(후보 2개 이상, 또는 0개) console.warn으로 남기니 브라우저 콘솔로 검증할 것.
+const THE_ODDS_API_KEY = "975c520ef6d6bcb08c22607596bf8022"; // EPL 앱과 동일한 실제 키
+const THE_ODDS_SPORT_PATTERNS = {
+  laliga:       { include: /la ?liga/i,        exclude: /(la ?liga ?2|segunda|2\b)/i },
+  bundesliga:   { include: /bundesliga/i,       exclude: /(2\.|3\.| ii\b|2\b|second)/i },
+  seriea:       { include: /serie ?a/i,         exclude: /serie ?b/i },
+  ligue1:       { include: /ligue ?1/i,         exclude: /ligue ?2/i },
+  eredivisie:   { include: /eredivisie/i,       exclude: /(eerste|2\b)/i },
+  championship: { include: /championship/i,     exclude: /(league ?1|league ?2|conference)/i },
+  mls:          { include: /^mls\b|major league soccer/i, exclude: /next ?pro/i },
+  eliteserien:  { include: /eliteserien/i,      exclude: /(obos|1\.? ?div|2\b)/i },
+};
+
+async function getTheOddsSportKeys() {
+  const map = await afCached('ml:theOddsSportKeys', 7 * 24 * 3600 * 1000, async () => {
+    try {
+      const url = `https://api.the-odds-api.com/v4/sports/?apiKey=${THE_ODDS_API_KEY}`;
+      const res = await fetchOddsViaProxies(url, {}, 8000);
+      if (!res) return null;
+      const list = await res.json().catch(() => null);
+      if (!Array.isArray(list)) return null;
+      const soccer = list.filter(s => (s.group || "").toLowerCase() === "soccer");
+      const out = {};
+      for (const [lk, pat] of Object.entries(THE_ODDS_SPORT_PATTERNS)) {
+        const candidates = soccer.filter(s => pat.include.test(s.title || "") && !pat.exclude.test(s.title || ""));
+        if (candidates.length >= 1) {
+          out[lk] = candidates[0].key;
+          if (candidates.length > 1) {
+            console.warn(`[theOddsApi] ${lk} 후보 ${candidates.length}개, 첫번째 채택:`, candidates.map(c => c.title));
+          }
+        } else {
+          console.warn(`[theOddsApi] ${lk}에 매칭되는 sport 못 찾음(the-odds-api.com 미지원이거나 패턴 재조정 필요)`);
+        }
+      }
+      return out;
+    } catch (e) { return null; }
+  });
+  return map || {};
+}
+
+async function fetchTheOddsEventsForLeague(leagueKey) {
+  const sportKeys = await getTheOddsSportKeys();
+  const sportKey = sportKeys[leagueKey];
+  if (!sportKey) return [];
+  const events = await afCached(`ml:theOddsEvents:${leagueKey}`, 6 * 3600 * 1000, async () => {
+    try {
+      const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?apiKey=${THE_ODDS_API_KEY}&regions=eu&markets=h2h&oddsFormat=decimal`;
+      const res = await fetchOddsViaProxies(url, {}, 8000);
+      if (!res) return null;
+      const j = await res.json().catch(() => null);
+      return Array.isArray(j) ? j : null;
+    } catch (e) { return null; }
+  });
+  return events || [];
+}
+
+function extractAllBookmakerOddsFromTheOddsApi(leagueKey, home, away, events) {
+  if (!Array.isArray(events) || !events.length) return [];
+  const ev = events.find(e =>
+    (isSameClubName(leagueKey, home, e.home_team) && isSameClubName(leagueKey, away, e.away_team)) ||
+    (isSameClubName(leagueKey, home, e.away_team) && isSameClubName(leagueKey, away, e.home_team)));
+  if (!ev) return [];
+  const swapped = !isSameClubName(leagueKey, home, ev.home_team);
+  const out = [];
+  for (const bk of (ev.bookmakers || [])) {
+    const h2h = (bk.markets || []).find(m => m.key === "h2h");
+    if (!h2h || !Array.isArray(h2h.outcomes)) continue;
+    let oh = null, od = null, oa = null;
+    for (const o of h2h.outcomes) {
+      if (typeof o.price !== "number") continue;
+      if (/^draw$/i.test(o.name || "")) od = o.price;
+      else if (isSameClubName(leagueKey, swapped ? away : home, o.name)) oh = o.price;
+      else if (isSameClubName(leagueKey, swapped ? home : away, o.name)) oa = o.price;
+    }
+    if (oh == null || oa == null) continue;
+    const bkName = bk.title || bk.key || "북메이커(The Odds API)";
+    out.push(swapped ? { bookmaker: bkName, home: oa, draw: od, away: oh } : { bookmaker: bkName, home: oh, draw: od, away: oa });
+  }
+  return out;
+}
+
 async function fetchAllBookmakerOdds(leagueKey, home, away) {
+  const results = [];
   try {
     const evUrl = `https://api.odds-api.io/v3/events?apiKey=${ODDS_API_IO_KEY}&sport=football&status=pending`;
     const res = await fetchOddsViaProxies(evUrl, {}, 8000);
-    if (!res) return [];
-    const events = await res.json().catch(() => null);
-    const list = Array.isArray(events) ? events : (Array.isArray(events?.data) ? events.data : null);
-    if (!Array.isArray(list)) return [];
+    if (res) {
+      const events = await res.json().catch(() => null);
+      const list = Array.isArray(events) ? events : (Array.isArray(events?.data) ? events.data : null);
+      if (Array.isArray(list)) {
+        const direct = list.find(ev => isSameClubName(leagueKey, home, ev.home) && isSameClubName(leagueKey, away, ev.away));
+        const swapped = direct ? null : list.find(ev => isSameClubName(leagueKey, home, ev.away) && isSameClubName(leagueKey, away, ev.home));
+        const match = direct || swapped;
+        if (match) {
+          const oddsUrl = `https://api.odds-api.io/v3/odds?apiKey=${ODDS_API_IO_KEY}&eventId=${match.id}`;
+          const oddsRes = await fetchOddsViaProxies(oddsUrl, {}, 8000);
+          if (oddsRes) {
+            const oddsData = await oddsRes.json().catch(() => null);
+            results.push(...extractAllBookmakerOddsFromOddsApiIo(leagueKey, home, away, oddsData, !!swapped));
+          }
+        }
+      }
+    }
+  } catch (e) { /* 다음 소스로 */ }
 
-    const direct = list.find(ev => isSameClubName(leagueKey, home, ev.home) && isSameClubName(leagueKey, away, ev.away));
-    const swapped = direct ? null : list.find(ev => isSameClubName(leagueKey, home, ev.away) && isSameClubName(leagueKey, away, ev.home));
-    const match = direct || swapped;
-    if (!match) return [];
+  // 2026-07-31 추가: odds-api.io가 못 준 경우(주로 마이너리그) the-odds-api.com으로 보강.
+  // 이미 결과가 있어도 다른 북메이커가 추가될 수 있어 항상 같이 조회(캐시가 있어 비용 적음).
+  try {
+    const events = await fetchTheOddsEventsForLeague(leagueKey);
+    results.push(...extractAllBookmakerOddsFromTheOddsApi(leagueKey, home, away, events));
+  } catch (e) { /* 무시 */ }
 
-    const oddsUrl = `https://api.odds-api.io/v3/odds?apiKey=${ODDS_API_IO_KEY}&eventId=${match.id}`;
-    const oddsRes = await fetchOddsViaProxies(oddsUrl, {}, 8000);
-    if (!oddsRes) return [];
-    const oddsData = await oddsRes.json().catch(() => null);
-    return extractAllBookmakerOddsFromOddsApiIo(leagueKey, home, away, oddsData, !!swapped);
-  } catch (e) {
-    return [];
-  }
+  return results;
 }
 
 function OddsComparisonPanel({leagueKey, home, away, modelProbs, onFairProbs}) {
