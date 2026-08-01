@@ -278,6 +278,16 @@ const LEAGUES = {
   },
 };
 const LEAGUE_ORDER = ["laliga","bundesliga","seriea","ligue1","eredivisie","championship","mls","eliteserien"];
+// 2026-08-02 추가: "다른 리그끼리는 예측 불가"로 막았다가 "그럼 챔스/유로파는
+// 어떻게 예측하냐"는 지적을 받고 재검토함 — ClubElo는 원래 전세계 클럽을
+// 한 척도로 매기는 크로스리그 비교용 데이터라(그래서 실제로 챔스 예측에도
+// 쓰인다), 진짜 문제는 "다른 리그라 예측이 안 된다"가 아니라 "프론트가
+// 지금 리그 ELO만 메모리에 올려서 상대팀 ELO를 못 찾았다"였다(백엔드에서
+// ELO/로고를 8개리그 전체 병합하도록 같이 수정함). 그래서 "다른 리그
+// 소속이라 막기"가 아니라 "우리가 트래킹하는 8개리그 소속이면(리그 안
+// 가리고) 예측 가능"으로 바꾼다 — 진짜로 못 하는 건 아예 트래킹 안 하는
+// 팀(하위리그·타대륙 등)과의 친선전뿐.
+let ALL_TRACKED_TEAMS = new Set(LEAGUE_ORDER.flatMap(k => LEAGUES[k].teams));
 
 // ============================================================ 전역 슬롯 (리그 전환 시 통째로 교체)
 let ELO = seedElo(LEAGUES.laliga.teams);
@@ -1969,7 +1979,7 @@ function LeaguePicker({ leagueKey, onChange }) {
       {LEAGUE_ORDER.map(k => (
         <button key={k} onClick={()=>onChange(k)}
           style={{flex:"0 0 auto", padding:"7px 12px", borderRadius:16, border:`1px solid ${leagueKey===k?T.accent:T.border}`,
-                  cursor:"pointer", fontSize:12.5, fontWeight:700, whiteSpace:"nowrap",
+                  cursor:"pointer", fontSize:13, fontWeight:700, whiteSpace:"nowrap",
                   background: leagueKey===k ? T.accentDim : T.surface,
                   color: leagueKey===k ? "#fff" : T.muted}}>
           {LEAGUES[k].label}
@@ -2071,7 +2081,7 @@ function TeamStyleRadarCard({ leagueKey, home, away }) {
         { values: RADAR_AXES.map(ax => hp.norm[ax]), color: T.accent },
         { values: RADAR_AXES.map(ax => ap.norm[ax]), color: T.red },
       ]}/>
-      <div style={{display:"flex", justifyContent:"center", gap:16, marginTop:6, fontSize:11.5}}>
+      <div style={{display:"flex", justifyContent:"center", gap:16, marginTop:6, fontSize:12}}>
         <span style={{color:T.accent}}>● {home}</span>
         <span style={{color:T.red}}>● {away}</span>
       </div>
@@ -2130,7 +2140,7 @@ function LeaderboardStatsCompareCard({ leagueKey, home, away }) {
     return (
       <div style={{display:"flex", alignItems:"center", gap:6, padding:"5px 0", borderBottom:`1px solid ${T.border}`}}>
         <span style={{flex:1, textAlign:"right", fontSize:13, fontWeight:700, color: hGood?T.green:T.text}}>{hVal}</span>
-        <span style={{width:110, textAlign:"center", fontSize:11, color:T.muted}}>{label}</span>
+        <span style={{width:110, textAlign:"center", fontSize:12, color:T.muted}}>{label}</span>
         <span style={{flex:1, textAlign:"left", fontSize:13, fontWeight:700, color: aGood?T.green:T.text}}>{aVal}</span>
       </div>
     );
@@ -2144,7 +2154,7 @@ function LeaderboardStatsCompareCard({ leagueKey, home, away }) {
         <span style={{fontSize:12, color:T.muted}}>{away} →</span>
       </div>
       {data.map(r => <StatRow key={r.metric} {...r}/>)}
-      <div style={{fontSize:10.5, color:T.dim, marginTop:6, textAlign:"center"}}>
+      <div style={{fontSize:10, color:T.dim, marginTop:6, textAlign:"center"}}>
         📐 이번 시즌 팀 스쿼드 누적치 비교(경기수 보정 없음) · 초록색 = 비교 우위
       </div>
     </Card>
@@ -2192,9 +2202,9 @@ function LiveInPlayPanel({home, away, lambdaHome, lambdaAway}) {
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
         <div>
           <div style={{fontSize:12, fontWeight:700, color:T.text}}>🔴 라이브 인플레이 재계산</div>
-          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>현재 스코어·경과 시간으로 남은 시간 기준 확률을 다시 계산합니다</div>
+          <div style={{fontSize:10, color:T.dim, marginTop:2}}>현재 스코어·경과 시간으로 남은 시간 기준 확률을 다시 계산합니다</div>
         </div>
-        <button onClick={()=>setActive(a=>!a)} style={{fontSize:11, color:T.accent, background:"transparent",
+        <button onClick={()=>setActive(a=>!a)} style={{fontSize:12, color:T.accent, background:"transparent",
                 border:`1px solid ${T.border}`, borderRadius:8, padding:"5px 10px", cursor:"pointer", whiteSpace:"nowrap"}}>
           {active ? "접기" : "펼치기"}
         </button>
@@ -2202,16 +2212,16 @@ function LiveInPlayPanel({home, away, lambdaHome, lambdaAway}) {
       {active && (
         <div>
           <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
-            <span style={{fontSize:11.5, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{home}</span>
+            <span style={{fontSize:12, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{home}</span>
             <input type="number" min="0" value={hg} onChange={e=>setHg(e.target.value)}
               style={{width:50, padding:"7px", borderRadius:7, background:T.surface, border:`1px solid ${T.border}`, color:T.text, textAlign:"center"}}/>
             <span style={{color:T.muted}}>:</span>
             <input type="number" min="0" value={ag} onChange={e=>setAg(e.target.value)}
               style={{width:50, padding:"7px", borderRadius:7, background:T.surface, border:`1px solid ${T.border}`, color:T.text, textAlign:"center"}}/>
-            <span style={{fontSize:11.5, color:T.muted, flex:1, textAlign:"right", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{away}</span>
+            <span style={{fontSize:12, color:T.muted, flex:1, textAlign:"right", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{away}</span>
           </div>
           <div style={{marginTop:12}}>
-            <div style={{display:"flex", justifyContent:"space-between", fontSize:11.5, color:T.muted}}>
+            <div style={{display:"flex", justifyContent:"space-between", fontSize:12, color:T.muted}}>
               <span>경과 시간</span><span style={{color:T.text, fontWeight:700}}>{minute}분</span>
             </div>
             <input type="range" min="1" max="90" step="1" value={minute} onChange={e=>setMinute(Number(e.target.value))} style={{width:"100%", marginTop:6}}/>
@@ -2223,13 +2233,13 @@ function LiveInPlayPanel({home, away, lambdaHome, lambdaAway}) {
           </button>
           {live && (
             <div style={{marginTop:12}}>
-              <div style={{textAlign:"center", fontSize:11, color:T.muted, marginBottom:6}}>
+              <div style={{textAlign:"center", fontSize:12, color:T.muted, marginBottom:6}}>
                 {live.minute}분 경과 · 현재 {live.curH}-{live.curA} · 남은 {Math.round(live.remainFrac*90)}분 기준 재계산
               </div>
               <Bar label={`${home} 승`} value={live.homeWinProb} color={T.accent}/>
               <Bar label="무승부" value={live.drawProb} color={T.gold}/>
               <Bar label={`${away} 승`} value={live.awayWinProb} color={T.red}/>
-              <div style={{fontSize:11, color:T.muted, marginTop:4, textAlign:"center"}}>
+              <div style={{fontSize:12, color:T.muted, marginTop:4, textAlign:"center"}}>
                 예상 최종 스코어: {live.topScores.map(s=>`${s.score} (${(s.prob*100).toFixed(1)}%)`).join(" · ")}
               </div>
             </div>
@@ -2276,7 +2286,7 @@ function PredictionExplainCard({home, away, result}) {
   return (
     <Card>
       <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>🧠 예측 근거</div>
-      <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>이번 예측 확률에 영향을 준 주요 요인들입니다</div>
+      <div style={{fontSize:10, color:T.dim, marginBottom:8}}>이번 예측 확률에 영향을 준 주요 요인들입니다</div>
       <div style={{display:"flex", flexDirection:"column", gap:8}}>
         {items.slice(0,6).map((it,i) => (
           <div key={i} style={{display:"flex", gap:8, fontSize:12, color:T.text, lineHeight:1.5}}>
@@ -2487,15 +2497,15 @@ function OddsComparisonPanel({leagueKey, home, away, modelProbs, onFairProbs}) {
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
         <div>
           <div style={{fontSize:12, fontWeight:700, color:T.text}}>📊 배당 비교 대시보드</div>
-          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>여러 북메이커 1X2 배당을 나란히 비교합니다</div>
+          <div style={{fontSize:10, color:T.dim, marginTop:2}}>여러 북메이커 1X2 배당을 나란히 비교합니다</div>
         </div>
         <button onClick={load} disabled={loading}
-          style={{fontSize:11, color:"#fff", background: loading?T.dim:T.accent,
+          style={{fontSize:12, color:"#fff", background: loading?T.dim:T.accent,
                   border:"none", borderRadius:8, padding:"7px 12px", cursor:loading?"default":"pointer", whiteSpace:"nowrap"}}>
           {loading ? "조회 중..." : (rows ? "🔄 새로고침" : "배당 불러오기")}
         </button>
       </div>
-      {error && <div style={{fontSize:11.5, color:T.gold, marginTop:8}}>{error}</div>}
+      {error && <div style={{fontSize:12, color:T.gold, marginTop:8}}>{error}</div>}
       {rows && rows.length > 0 && (
         <div style={{marginTop:10, overflowX:"auto"}}>
           <table style={{width:"100%", borderCollapse:"collapse", fontSize:12}}>
@@ -2525,13 +2535,13 @@ function OddsComparisonPanel({leagueKey, home, away, modelProbs, onFairProbs}) {
             const evAway = computeEV(modelProbs.away, best.away);
             return (
               <div style={{marginTop:10, paddingTop:8, borderTop:`1px dashed ${T.border}`}}>
-                <div style={{fontSize:11, color:T.muted, marginBottom:6}}>최고 배당 기준 EV = 모델확률×배당 − 1</div>
+                <div style={{fontSize:12, color:T.muted, marginBottom:6}}>최고 배당 기준 EV = 모델확률×배당 − 1</div>
                 <div style={{display:"flex", gap:8}}>
                   {[{label:"홈", ev:evHome},{label:"무", ev:evDraw},{label:"원정", ev:evAway}].map(({label,ev}) => (
                     <div key={label} style={{flex:1, textAlign:"center", padding:"8px 4px", borderRadius:8,
                       background:T.surface, border:`1px solid ${ev!==null && ev>0.03 ? T.green : T.border}`}}>
-                      <div style={{fontSize:10.5, color:T.muted}}>{label}</div>
-                      <div style={{fontSize:13.5, fontWeight:800, marginTop:2, color: ev===null?"gray":ev>0.03?T.green:ev<-0.03?T.red:T.text}}>
+                      <div style={{fontSize:10, color:T.muted}}>{label}</div>
+                      <div style={{fontSize:13, fontWeight:800, marginTop:2, color: ev===null?"gray":ev>0.03?T.green:ev<-0.03?T.red:T.text}}>
                         {ev===null?"-":`${ev>=0?"+":""}${(ev*100).toFixed(1)}%`}
                       </div>
                     </div>
@@ -2579,10 +2589,10 @@ function LineupInjuryPanel({leagueKey, home, away}) {
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
         <div>
           <div style={{fontSize:12, fontWeight:700, color:T.text}}>👥 확정 라인업 · 결장 정보</div>
-          <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>킥오프 1시간 전부터 라인업이 채워집니다 ({injurySourceLabel})</div>
+          <div style={{fontSize:10, color:T.dim, marginTop:2}}>킥오프 1시간 전부터 라인업이 채워집니다 ({injurySourceLabel})</div>
         </div>
         <button onClick={load} disabled={loading}
-          style={{fontSize:11, color:"#fff", background: loading?T.dim:T.accent,
+          style={{fontSize:12, color:"#fff", background: loading?T.dim:T.accent,
                   border:"none", borderRadius:8, padding:"7px 12px", cursor:loading?"default":"pointer", whiteSpace:"nowrap"}}>
           {loading ? "조회 중..." : (tried ? "🔄 새로고침" : "라인업 불러오기")}
         </button>
@@ -2597,7 +2607,7 @@ function LineupInjuryPanel({leagueKey, home, away}) {
           부상자만 여기(버튼 눌러야 조회되는 것들)에 남긴다. */}
 
       {tried && !loading && !hasLineup && !hasInjuries && (
-        <div style={{fontSize:11.5, color:T.gold, marginTop:8}}>
+        <div style={{fontSize:12, color:T.gold, marginTop:8}}>
           아직 확정 라인업/결장 정보가 없습니다 (킥오프 임박 전이거나 매칭 실패).
         </div>
       )}
@@ -2606,11 +2616,11 @@ function LineupInjuryPanel({leagueKey, home, away}) {
         <div style={{marginTop:10, display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
           {["home","away"].map(side => (
             <div key={side}>
-              <div style={{fontSize:11, fontWeight:700, color:T.muted, marginBottom:4}}>
+              <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:4}}>
                 {side==="home"?home:away} {lineup[side]?.formation ? `(${lineup[side].formation})` : ""}
               </div>
               {(lineup[side]?.startXI||[]).map((p,i) => (
-                <div key={i} style={{fontSize:11.5, color:T.text, padding:"2px 0"}}>
+                <div key={i} style={{fontSize:12, color:T.text, padding:"2px 0"}}>
                   {p.number!=null?`${p.number} `:""}{p.name}{p.pos?` (${p.pos})`:""}
                 </div>
               ))}
@@ -2621,12 +2631,12 @@ function LineupInjuryPanel({leagueKey, home, away}) {
 
       {hasInjuries && (
         <div style={{marginTop:12, paddingTop:8, borderTop:`1px dashed ${T.border}`}}>
-          <div style={{fontSize:11, fontWeight:700, color:T.muted, marginBottom:4}}>🩹 결장(부상·징계)</div>
+          <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:4}}>🩹 결장(부상·징계)</div>
           <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
             {["home","away"].map(side => (
               <div key={side}>
                 {(injuries[side]||[]).map((p,i) => (
-                  <div key={i} style={{fontSize:11.5, color:T.red, padding:"2px 0"}}>{p.name} — {p.reason}</div>
+                  <div key={i} style={{fontSize:12, color:T.red, padding:"2px 0"}}>{p.name} — {p.reason}</div>
                 ))}
               </div>
             ))}
@@ -2761,13 +2771,13 @@ function ShareResultPanel({leagueKey, home, away, result}) {
   return (
     <Card style={{textAlign:"center"}}>
       <div style={{fontSize:12, fontWeight:700, color:T.text}}>🖼️ 예측 결과 공유</div>
-      <div style={{fontSize:10.5, color:T.dim, marginTop:2, marginBottom:8}}>이미지 카드로 저장하거나 공유합니다</div>
+      <div style={{fontSize:10, color:T.dim, marginTop:2, marginBottom:8}}>이미지 카드로 저장하거나 공유합니다</div>
       <button onClick={handleShare} disabled={busy}
         style={{width:"100%", padding:"12px", borderRadius:10, border:"none",
                 background: busy ? T.dim : T.purple, color:"#fff", fontSize:14, fontWeight:800, cursor:busy?"default":"pointer"}}>
         {busy ? "이미지 생성 중..." : "📤 공유 카드 만들기"}
       </button>
-      {msg && <div style={{fontSize:11.5, color:T.muted, marginTop:8}}>{msg}</div>}
+      {msg && <div style={{fontSize:12, color:T.muted, marginTop:8}}>{msg}</div>}
     </Card>
   );
 }
@@ -2916,14 +2926,14 @@ function AbsenceSummaryPanel({home, away}) {
     <Card>
       {hasImpactData && (
         <div style={{marginBottom:12, padding:"8px", background:"rgba(255,255,255,0.03)", borderRadius:8, border:`1px solid ${T.border}`}}>
-          <div style={{fontSize:11, color:T.dim, marginBottom:6}}>
+          <div style={{fontSize:12, color:T.dim, marginBottom:6}}>
             ⭐ 핵심선수(개인기여도) — 체크하면 결장 처리, 팀 합산 최대 -15%p로 승부예측에 즉시 반영
           </div>
           <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"4px 12px"}}>
             <div>
-              <div style={{fontSize:10.5, color:T.muted, fontWeight:700, marginBottom:3}}>{home}{absentCountH>0?` (결장 ${absentCountH})`:""}</div>
+              <div style={{fontSize:10, color:T.muted, fontWeight:700, marginBottom:3}}>{home}{absentCountH>0?` (결장 ${absentCountH})`:""}</div>
               {keyHome.map((p,i)=>(
-                <label key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:11.5, padding:"2px 0", cursor:"pointer",
+                <label key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:12, padding:"2px 0", cursor:"pointer",
                   color: isAbsent(home,p.name) ? T.red : T.text, textDecoration: isAbsent(home,p.name)?"line-through":"none"}}>
                   <input type="checkbox" checked={isAbsent(home,p.name)} onChange={()=>toggleAbsent(home,p.name)} style={{cursor:"pointer"}}/>
                   {p.name} <span style={{color:T.dim, fontSize:10}}>(-{p.impactPct.toFixed(1)}%p)</span>
@@ -2931,9 +2941,9 @@ function AbsenceSummaryPanel({home, away}) {
               ))}
             </div>
             <div>
-              <div style={{fontSize:10.5, color:T.muted, fontWeight:700, marginBottom:3}}>{away}{absentCountA>0?` (결장 ${absentCountA})`:""}</div>
+              <div style={{fontSize:10, color:T.muted, fontWeight:700, marginBottom:3}}>{away}{absentCountA>0?` (결장 ${absentCountA})`:""}</div>
               {keyAway.map((p,i)=>(
-                <label key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:11.5, padding:"2px 0", cursor:"pointer",
+                <label key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:12, padding:"2px 0", cursor:"pointer",
                   color: isAbsent(away,p.name) ? T.red : T.text, textDecoration: isAbsent(away,p.name)?"line-through":"none"}}>
                   <input type="checkbox" checked={isAbsent(away,p.name)} onChange={()=>toggleAbsent(away,p.name)} style={{cursor:"pointer"}}/>
                   {p.name} <span style={{color:T.dim, fontSize:10}}>(-{p.impactPct.toFixed(1)}%p)</span>
@@ -2942,32 +2952,32 @@ function AbsenceSummaryPanel({home, away}) {
             </div>
           </div>
           {(absentCountH>0||absentCountA>0) && (
-            <div style={{fontSize:10.5, color:T.dim, marginTop:6}}>
+            <div style={{fontSize:10, color:T.dim, marginTop:6}}>
               결장 반영폭 — {home}: -{absentWinPenaltyPct(home).toFixed(1)}%p, {away}: -{absentWinPenaltyPct(away).toFixed(1)}%p · 다시 예측하면 승부예측에 반영됩니다.
             </div>
           )}
         </div>
       )}
       {anyAbs && (<>
-      <div style={{fontSize:12.5, fontWeight:700, color:T.text, marginBottom:2}}>🚑 결장·출전 불투명 인원</div>
-      <div style={{fontSize:10.5, color:T.muted, marginBottom:8}}>경고누적·부상·레드카드 등으로 이 경기 결장/불투명한 주요 선수</div>
+      <div style={{fontSize:13, fontWeight:700, color:T.text, marginBottom:2}}>🚑 결장·출전 불투명 인원</div>
+      <div style={{fontSize:10, color:T.muted, marginBottom:8}}>경고누적·부상·레드카드 등으로 이 경기 결장/불투명한 주요 선수</div>
       <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12}}>
         {data.map(({team, abs}) => {
           const total = abs.red.length + abs.warn.length + abs.injury.length + abs.doubt.length;
           return (
             <div key={team}>
-              <div style={{fontSize:12.5, fontWeight:800, color:T.cyan, marginBottom:6}}>
+              <div style={{fontSize:13, fontWeight:800, color:T.cyan, marginBottom:6}}>
                 <TeamCrest name={team}/> {team} <span style={{color:T.muted, fontWeight:600}}>· {total}명</span>
               </div>
               {total === 0 ? (
-                <div style={{fontSize:11.5, color:T.muted}}>보고된 결장 없음</div>
+                <div style={{fontSize:12, color:T.muted}}>보고된 결장 없음</div>
               ) : catMeta.map(cm => abs[cm.key].length ? (
                 <div key={cm.key} style={{marginBottom:6}}>
-                  <div style={{fontSize:10.5, color:T.muted, marginBottom:2}}>{cm.icon} {cm.label}</div>
+                  <div style={{fontSize:10, color:T.muted, marginBottom:2}}>{cm.icon} {cm.label}</div>
                   {abs[cm.key].map((p,i) => (
-                    <div key={i} style={{fontSize:11.5, color:T.text, lineHeight:1.5}}>
+                    <div key={i} style={{fontSize:12, color:T.text, lineHeight:1.5}}>
                       · <b>{p.name}</b>
-                      <span style={{color:T.muted, fontSize:10.5}}>{p.reason ? ` (${p.reason})` : ""}</span>
+                      <span style={{color:T.muted, fontSize:10}}>{p.reason ? ` (${p.reason})` : ""}</span>
                     </div>
                   ))}
                 </div>
@@ -2976,7 +2986,7 @@ function AbsenceSummaryPanel({home, away}) {
           );
         })}
       </div>
-      <div style={{fontSize:10.5, color:T.muted, marginTop:8, lineHeight:1.5}}>
+      <div style={{fontSize:10, color:T.muted, marginTop:8, lineHeight:1.5}}>
         API-Football 부상 피드 기준(레드카드/출전정지 사유 구분은 2026-07-26부터 반영).
         승률 보정 자체는 사유와 무관하게 핵심결장 -6%p/로테이션 -2%p(팀 합산 상한 -28%p)로 계산됩니다.
       </div>
@@ -2991,7 +3001,7 @@ function H2HCard({ teamA, teamB }) {
     return (
       <Card>
         <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:6}}>🤝 상대전적 (H2H)</div>
-        <div style={{fontSize:12.5, color:T.muted, textAlign:"center", padding:"6px 0"}}>
+        <div style={{fontSize:13, color:T.muted, textAlign:"center", padding:"6px 0"}}>
           아직 {teamA} vs {teamB} 경기 결과가 파이프라인에 없습니다.
         </div>
       </Card>
@@ -3003,21 +3013,21 @@ function H2HCard({ teamA, teamB }) {
   return (
     <Card>
       <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:2}}>🤝 상대전적 (H2H)</div>
-      <div style={{fontSize:11, color:T.muted, marginBottom:8}}>최근 {h.total}경기 기준</div>
+      <div style={{fontSize:12, color:T.muted, marginBottom:8}}>최근 {h.total}경기 기준</div>
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:4}}>
         <div style={{textAlign:"center", flex:1}}>
-          <div style={{fontSize:11, color:T.muted}}>{teamA}</div>
+          <div style={{fontSize:12, color:T.muted}}>{teamA}</div>
           <div style={{fontSize:22, fontWeight:900, color:T.accent}}>{h.aWin}</div>
           <div style={{fontSize:10, color:T.dim}}>승</div>
         </div>
         <div style={{textAlign:"center", flex:0.7}}>
-          <div style={{fontSize:11, color:T.muted}}>무</div>
-          <div style={{fontSize:20, fontWeight:800, color:T.muted}}>{h.draw}</div>
+          <div style={{fontSize:12, color:T.muted}}>무</div>
+          <div style={{fontSize:19, fontWeight:800, color:T.muted}}>{h.draw}</div>
           <div style={{fontSize:10, color:T.dim, marginTop:6}}>득실</div>
           <div style={{fontSize:12, color:T.text, fontFamily:"monospace"}}>{h.aGF} : {h.aGA}</div>
         </div>
         <div style={{textAlign:"center", flex:1}}>
-          <div style={{fontSize:11, color:T.muted}}>{teamB}</div>
+          <div style={{fontSize:12, color:T.muted}}>{teamB}</div>
           <div style={{fontSize:22, fontWeight:900, color:T.gold}}>{h.bWin}</div>
           <div style={{fontSize:10, color:T.dim}}>승</div>
         </div>
@@ -3028,11 +3038,11 @@ function H2HCard({ teamA, teamB }) {
         <div style={{width:`${barB}%`, background:T.gold}}/>
       </div>
       <div style={{marginTop:12, borderTop:`1px solid ${T.border}`, paddingTop:8}}>
-        <div style={{fontSize:11, color:T.muted, marginBottom:6}}>최근 맞대결</div>
+        <div style={{fontSize:12, color:T.muted, marginBottom:6}}>최근 맞대결</div>
         {h.games.slice(0,5).map((g,i) => (
           <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between",
-            padding:"5px 0", borderTop: i>0?`1px solid ${T.border}`:"none", fontSize:12.5}}>
-            <span style={{color:T.dim, fontSize:10.5, width:74}}>{g.date || "-"}</span>
+            padding:"5px 0", borderTop: i>0?`1px solid ${T.border}`:"none", fontSize:13}}>
+            <span style={{color:T.dim, fontSize:10, width:74}}>{g.date || "-"}</span>
             <span style={{flex:1, textAlign:"right"}}>{g.home}</span>
             <span style={{margin:"0 8px", fontFamily:"monospace", fontWeight:800, color:T.text}}>{g.hg}:{g.ag}</span>
             <span style={{flex:1}}>{g.away}</span>
@@ -3052,7 +3062,7 @@ function CollapsibleSection({title, defaultOpen=false, children}) {
                 padding:"12px 14px", borderRadius:10, border:`1px solid ${T.border}`,
                 background:T.surface, color:T.text, cursor:"pointer"}}>
         <span style={{fontSize:13, fontWeight:800}}>{title}</span>
-        <span style={{fontSize:11.5, color:T.accent, fontWeight:700, flexShrink:0, marginLeft:8}}>
+        <span style={{fontSize:12, color:T.accent, fontWeight:700, flexShrink:0, marginLeft:8}}>
           {open ? "▲ 접기" : "▼ 펼치기"}
         </span>
       </button>
@@ -3063,6 +3073,15 @@ function CollapsibleSection({title, defaultOpen=false, children}) {
 
 function PredictTab({ leagueKey, pendingMatch }) {
   const teams = LEAGUES[leagueKey].teams;
+  // 2026-08-02 추가: pendingMatch로 들어온 팀이 이 리그 소속이 아니어도
+  // (챔스/유로파/리그간 친선전 상대) 드롭다운에서 선택 가능해야 하니
+  // teams 목록에 임시로 얹는다. ELO/로고는 백엔드에서 이미 8개리그 전체
+  // 병합해뒀으니 값 자체는 정상적으로 나온다.
+  const selectableTeams = useMemo(() => {
+    const extra = [pendingMatch?.home, pendingMatch?.away]
+      .filter(t => t && !teams.includes(t));
+    return extra.length ? [...teams, ...extra] : teams;
+  }, [teams, pendingMatch?.home, pendingMatch?.away]);
   const [home, setHome] = useState(teams[0]);
   const [away, setAway] = useState(teams[1]);
   const [result, setResult] = useState(null);
@@ -3077,9 +3096,12 @@ function PredictTab({ leagueKey, pendingMatch }) {
 
   // 2026-07-25 추가: 일정탭 "▶"로 넘어온 경기가 있으면 팀 자동 세팅 (EPL 앱 onSelectMatch와 동일 UX).
   // ts를 deps에 둬서 같은 매치업을 연달아 눌러도(예: 결과 본 뒤 뒤로가서 같은 경기 다시 클릭) 매번 반영됨.
+  // 2026-08-02 수정: "이 리그 소속인지"가 아니라 "우리가 트래킹하는 8개리그
+  // 아무데나 소속인지"로 가드를 완화 — ScheduleTab의 ▶ 버튼도 동일 기준으로
+  // 이미 걸러서 넘기니(ALL_TRACKED_TEAMS), 여기 도달했다면 사실상 항상 통과함.
   useEffect(() => {
     if (!pendingMatch) return;
-    if (!teams.includes(pendingMatch.home) || !teams.includes(pendingMatch.away)) return; // 리그 안 맞는 경기면 무시(방어)
+    if (!ALL_TRACKED_TEAMS.has(pendingMatch.home) || !ALL_TRACKED_TEAMS.has(pendingMatch.away)) return; // 아예 트래킹 안 하는 팀이면 무시(방어)
     setHome(pendingMatch.home); setAway(pendingMatch.away); setResult(null); setSaved(false);
   }, [pendingMatch, pendingMatch?.ts]);
 
@@ -3123,13 +3145,13 @@ function PredictTab({ leagueKey, pendingMatch }) {
       <Card>
         <div style={{display:"flex", gap:8, alignItems:"center"}}>
           <select value={home} onChange={e=>setHome(e.target.value)}
-            style={{flex:1, background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 8px", fontSize:13}}>
-            {teams.map(t => <option key={t} value={t}>{t}</option>)}
+            style={{flex:1, minWidth:0, background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 8px", fontSize:13}}>
+            {selectableTeams.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
           <span style={{color:T.muted, fontSize:12}}>vs</span>
           <select value={away} onChange={e=>setAway(e.target.value)}
-            style={{flex:1, background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 8px", fontSize:13}}>
-            {teams.map(t => <option key={t} value={t}>{t}</option>)}
+            style={{flex:1, minWidth:0, background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 8px", fontSize:13}}>
+            {selectableTeams.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
         <button onClick={run} disabled={home===away || loading}
@@ -3138,7 +3160,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
                   cursor: (home===away || loading) ? "default" : "pointer"}}>
           {loading ? "시뮬레이션 중... (10만회)" : "예측하기"}
         </button>
-        {home===away && <div style={{color:T.red, fontSize:11.5, marginTop:6}}>같은 팀은 선택할 수 없습니다.</div>}
+        {home===away && <div style={{color:T.red, fontSize:12, marginTop:6}}>같은 팀은 선택할 수 없습니다.</div>}
       </Card>
 
       {result && (
@@ -3150,25 +3172,25 @@ function PredictTab({ leagueKey, pendingMatch }) {
             </div>
             {result.rivalry && (
               <div style={{display:"inline-block", background:"rgba(245,166,35,0.15)", border:`1px solid ${T.gold}`,
-                borderRadius:20, padding:"3px 10px", fontSize:11, color:T.gold, fontWeight:700, marginBottom:8, marginRight:6}}>
+                borderRadius:20, padding:"3px 10px", fontSize:12, color:T.gold, fontWeight:700, marginBottom:8, marginRight:6}}>
                 🔥 더비/라이벌 매치 — 접전 보정 적용
               </div>
             )}
             {result.injuryApplied && (
               <div style={{display:"inline-block", background:"rgba(255,61,87,0.12)", border:`1px solid ${T.red}`,
-                borderRadius:20, padding:"3px 10px", fontSize:11, color:T.red, fontWeight:700, marginBottom:8, marginRight:6}}>
+                borderRadius:20, padding:"3px 10px", fontSize:12, color:T.red, fontWeight:700, marginBottom:8, marginRight:6}}>
                 🩹 부상자 반영됨
               </div>
             )}
             {result.fatigueApplied && (
               <div style={{display:"inline-block", background:"rgba(0,188,212,0.12)", border:`1px solid ${T.cyan}`,
-                borderRadius:20, padding:"3px 10px", fontSize:11, color:T.cyan, fontWeight:700, marginBottom:8}}>
+                borderRadius:20, padding:"3px 10px", fontSize:12, color:T.cyan, fontWeight:700, marginBottom:8}}>
                 ✈️ 월드컵 여독 반영됨
               </div>
             )}
             {result.mlApplied && (
               <div style={{display:"inline-block", background:"rgba(156,39,176,0.12)", border:`1px solid ${T.purple}`,
-                borderRadius:20, padding:"3px 10px", fontSize:11, color:T.purple, fontWeight:700, marginBottom:8}}>
+                borderRadius:20, padding:"3px 10px", fontSize:12, color:T.purple, fontWeight:700, marginBottom:8}}>
                 🤖 ML 앙상블 반영됨
               </div>
             )}
@@ -3204,8 +3226,8 @@ function PredictTab({ leagueKey, pendingMatch }) {
                 border: i===0 ? `1px solid ${T.accent}` : "none",
                 borderBottom: (i>0 && i<result.topScores.length-1) ? `1px solid ${T.border}` : (i===0 ? undefined : "none")}}>
                 <span style={{display:"flex", alignItems:"center", gap:6}}>
-                  {i===0 && <span style={{fontSize:11}}>🎯</span>}
-                  <span style={{fontSize: i===0?15:13, color: i===0?T.accent:T.text, fontWeight: i===0?900:700,
+                  {i===0 && <span style={{fontSize:12}}>🎯</span>}
+                  <span style={{fontSize: i===0?14:13, color: i===0?T.accent:T.text, fontWeight: i===0?900:700,
                     fontFamily: i===0 ? "monospace" : undefined}}>{s.score}</span>
                 </span>
                 <span style={{fontSize: i===0?13:12, color: i===0?T.accent:T.muted, fontWeight: i===0?800:400}}>{(s.prob*100).toFixed(1)}%</span>
@@ -3216,7 +3238,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
           <CollapsibleSection title="📊 상세 통계 (마켓·핸디캡·고급지표·최근폼)">
           <Card>
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>마켓 지표</div>
-            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, fontSize:12.5}}>
+            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, fontSize:13}}>
               <div style={{color:T.muted}}>2.5오버 <span style={{color:T.text, fontWeight:700}}>{(result.overUnder[2.5].over*100).toFixed(0)}%</span></div>
               <div style={{color:T.muted}}>2.5언더 <span style={{color:T.text, fontWeight:700}}>{(result.overUnder[2.5].under*100).toFixed(0)}%</span></div>
               <div style={{color:T.muted}}>3.5오버 <span style={{color:T.text, fontWeight:700}}>{(result.overUnder[3.5].over*100).toFixed(0)}%</span></div>
@@ -3229,7 +3251,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
           {result.handicapProbs && (
             <Card>
               <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>🎯 핸디캡 (Asian Handicap)</div>
-              <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>홈팀 기준 커버 확률 — EPL 앱과 동일 공식 이식(2026-07-25)</div>
+              <div style={{fontSize:10, color:T.dim, marginBottom:8}}>홈팀 기준 커버 확률 — EPL 앱과 동일 공식 이식(2026-07-25)</div>
               <div style={{display:"flex", flexWrap:"wrap", gap:8}}>
                 {Object.entries(result.handicapProbs).map(([h, prob]) => {
                   const isPos = prob > 0.55, isNeg = prob < 0.45;
@@ -3237,13 +3259,13 @@ function PredictTab({ leagueKey, pendingMatch }) {
                   return (
                     <div key={h} style={{flex:"1 1 22%", minWidth:70, textAlign:"center", padding:"8px 4px",
                       borderRadius:9, background:T.surface, border:`1px solid ${isPos?T.green:isNeg?T.red:T.border}`}}>
-                      <div style={{fontSize:11, color:T.muted}}>홈 {h}</div>
-                      <div style={{fontSize:15, fontWeight:800, color, marginTop:2}}>{(prob*100).toFixed(0)}%</div>
+                      <div style={{fontSize:12, color:T.muted}}>홈 {h}</div>
+                      <div style={{fontSize:14, fontWeight:800, color, marginTop:2}}>{(prob*100).toFixed(0)}%</div>
                     </div>
                   );
                 })}
               </div>
-              <div style={{fontSize:10.5, color:T.dim, marginTop:8}}>💡 홈팀이 해당 핸디캡을 극복할 확률. 50% 이상이면 홈팀 유리.</div>
+              <div style={{fontSize:10, color:T.dim, marginTop:8}}>💡 홈팀이 해당 핸디캡을 극복할 확률. 50% 이상이면 홈팀 유리.</div>
             </Card>
           )}
 
@@ -3256,7 +3278,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
               return (
                 <div style={{display:"flex", alignItems:"center", gap:6, padding:"5px 0", borderBottom:`1px solid ${T.border}`}}>
                   <span style={{flex:1, textAlign:"right", fontSize:13, fontWeight:700, color: hGood?T.green:T.text}}>{fmt(hVal)}</span>
-                  <span style={{width:120, textAlign:"center", fontSize:11, color:T.muted}}>{label}</span>
+                  <span style={{width:120, textAlign:"center", fontSize:12, color:T.muted}}>{label}</span>
                   <span style={{flex:1, textAlign:"left", fontSize:13, fontWeight:700, color: aGood?T.green:T.text}}>{fmt(aVal)}</span>
                 </div>
               );
@@ -3273,7 +3295,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
                 <AdvRow label="빅찬스 생성/경기" hVal={hAdv?.bigChances} aVal={aAdv?.bigChances}/>
                 <AdvRow label="빅찬스 허용/경기" hVal={hAdv?.bigChancesAllowed} aVal={aAdv?.bigChancesAllowed} higherBetter={false}/>
                 <AdvRow label="슈팅 품질 (xG/슈팅)" hVal={hAdv?.shotQuality} aVal={aAdv?.shotQuality} fmt={v=>v?.toFixed?.(3)??"-"}/>
-                <div style={{fontSize:10.5, color:T.dim, marginTop:6, textAlign:"center"}}>
+                <div style={{fontSize:10, color:T.dim, marginTop:6, textAlign:"center"}}>
                   📐 ELO·xG 기반 추정치 (실측 FBref/FotMob 아님) · 초록색 = 비교 우위
                   {(!hAdv || !aAdv) && <><br/><span style={{color:T.gold}}>※ 팀 xG 데이터가 아직 없어 한쪽은 표시 못 함</span></>}
                 </div>
@@ -3289,7 +3311,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
           <button onClick={saveToHistory} disabled={saved}
             style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${saved?T.green:T.border}`,
                     background: saved ? "transparent" : T.surface, color: saved ? T.green : T.text,
-                    fontWeight:700, fontSize:12.5, cursor: saved ? "default" : "pointer", marginBottom:10}}>
+                    fontWeight:700, fontSize:13, cursor: saved ? "default" : "pointer", marginBottom:10}}>
             {saved ? "✅ 기록 탭에 저장됨" : "📝 이 예측 기록에 저장"}
           </button>
 
@@ -3302,7 +3324,7 @@ function PredictTab({ leagueKey, pendingMatch }) {
 
           <ShareResultPanel leagueKey={leagueKey} home={home} away={away} result={result}/>
 
-          <div style={{fontSize:10.5, color:T.dim, marginTop:-4, marginBottom:8, lineHeight:1.5, padding:"0 4px"}}>
+          <div style={{fontSize:10, color:T.dim, marginTop:-4, marginBottom:8, lineHeight:1.5, padding:"0 4px"}}>
             ⚠️ Elo 공식 + 몬테카를로(10만회) 시뮬레이션 블렌딩
             {result.xgBlended
               ? " + 실데이터 xG(70:30) 반영된 예측입니다."
@@ -3321,21 +3343,21 @@ function TeamListTab({ leagueKey, favorites, onToggleFavorite }) {
   const teams = [...lg.teams].sort((a,b)=>a.localeCompare(b,"ko"));
   return (
     <Card>
-      <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:2}}>{lg.label} <span style={{color:T.muted, fontWeight:600, fontSize:11.5}}>· {lg.country} · {lg.teams.length}팀</span></div>
-      <div style={{fontSize:10.5, color:T.dim, marginBottom:10}}>2026-27 시즌 명단 (⭐ 눌러서 즐겨찾기 등록)</div>
+      <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:2}}>{lg.label} <span style={{color:T.muted, fontWeight:600, fontSize:12}}>· {lg.country} · {lg.teams.length}팀</span></div>
+      <div style={{fontSize:10, color:T.dim, marginBottom:10}}>2026-27 시즌 명단 (⭐ 눌러서 즐겨찾기 등록)</div>
       {teams.map((t,i) => (
         <div key={t} style={{display:"flex", justifyContent:"space-between", alignItems:"center",
           padding:"9px 4px", borderBottom: i<teams.length-1 ? `1px solid ${T.border}` : "none"}}>
           <div style={{display:"flex", alignItems:"center", gap:8}}>
             <button onClick={() => onToggleFavorite && onToggleFavorite(t)}
-              style={{background:"none", border:"none", cursor:"pointer", fontSize:15, padding:0, lineHeight:1,
+              style={{background:"none", border:"none", cursor:"pointer", fontSize:14, padding:0, lineHeight:1,
                       color: (favorites||[]).includes(t) ? T.gold : T.dim}}>
               {(favorites||[]).includes(t) ? "★" : "☆"}
             </button>
             <TeamCrest name={t} size={26}/>
             <span style={{fontSize:13, color:T.text}}>{t}</span>
           </div>
-          <span style={{fontSize:11.5, color:T.muted}}>ELO {Math.round(getEffectiveElo(t))}</span>
+          <span style={{fontSize:12, color:T.muted}}>ELO {Math.round(getEffectiveElo(t))}</span>
         </div>
       ))}
     </Card>
@@ -3355,7 +3377,7 @@ function RankingTab({ leagueKey }) {
           <span style={{width:22, fontSize:12, color:T.muted, fontWeight:700}}>{i+1}</span>
           <TeamCrest name={t} size={20}/>
           <span style={{flex:1, fontSize:13, color:T.text}}>{t}</span>
-          <span style={{fontSize:12.5, color:T.accent, fontWeight:700}}>{Math.round(getEffectiveElo(t))}</span>
+          <span style={{fontSize:13, color:T.accent, fontWeight:700}}>{Math.round(getEffectiveElo(t))}</span>
         </div>
       ))}
     </Card>
@@ -3382,7 +3404,7 @@ function SeasonOutlookTab({ leagueKey }) {
       <Card>
         <div style={{textAlign:"center", padding:"20px 8px"}}>
           <div style={{fontSize:28, marginBottom:8}}>🔮</div>
-          <div style={{fontSize:13.5, color:T.text, fontWeight:700, marginBottom:6}}>
+          <div style={{fontSize:13, color:T.text, fontWeight:700, marginBottom:6}}>
             일정이 없어서 시즌 시뮬레이션을 돌릴 수 없습니다
           </div>
           <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
@@ -3414,7 +3436,7 @@ function SeasonOutlookTab({ leagueKey }) {
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>🏆 우승 확률</div>
             {result.table.filter(r => r.titleProb > 0.005).slice(0, 8).map((r, i) => (
               <div key={r.team} style={{marginBottom:6}}>
-                <div style={{display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:3}}>
+                <div style={{display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:3}}>
                   <span style={{color:T.text, display:"flex", alignItems:"center", gap:6}}>{i+1}. <TeamCrest name={r.team} size={18}/> {r.team}</span>
                   <span style={{color:T.gold, fontWeight:700}}>{(r.titleProb*100).toFixed(1)}%</span>
                 </div>
@@ -3432,7 +3454,7 @@ function SeasonOutlookTab({ leagueKey }) {
             </div>
             {[...result.table].sort((a,b)=>b.relegationProb-a.relegationProb).filter(r => r.relegationProb > 0.01).slice(0, 8).map((r) => (
               <div key={r.team} style={{marginBottom:6}}>
-                <div style={{display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:3}}>
+                <div style={{display:"flex", justifyContent:"space-between", fontSize:13, marginBottom:3}}>
                   <span style={{color:T.text, display:"flex", alignItems:"center", gap:6}}><TeamCrest name={r.team} size={18}/> {r.team}</span>
                   <span style={{color:T.red, fontWeight:700}}>{(r.relegationProb*100).toFixed(1)}%</span>
                 </div>
@@ -3444,7 +3466,7 @@ function SeasonOutlookTab({ leagueKey }) {
           </Card>
           )}
 
-          <div style={{fontSize:10.5, color:T.dim, marginBottom:8, lineHeight:1.5, padding:"0 4px"}}>
+          <div style={{fontSize:10, color:T.dim, marginBottom:8, lineHeight:1.5, padding:"0 4px"}}>
             {result.zoneSize > 0 ? (
               <>⚠️ 강등권 기준은 리그마다 플레이오프 등 실제 규정과 100% 일치하지 않는 근사치(하위 {result.zoneSize}팀)입니다.</>
             ) : (
@@ -3497,12 +3519,12 @@ function StandingsTab({ leagueKey }) {
 
   return (
     <Card>
-      <div style={{fontSize:11.5, color:T.dim, marginBottom:10, lineHeight:1.5}}>
+      <div style={{fontSize:12, color:T.dim, marginBottom:10, lineHeight:1.5}}>
         {hasResults
           ? `✅ 실제 경기 결과 ${playedCount}경기 반영된 승점·골득실 기준 순위입니다.`
           : "⚠️ 시즌 시작 전이라 전 팀 0승점입니다. 지금 순서는 ELO 기준 프리시즌 예상 순위이며, 실제 경기 결과가 파이프라인에 들어오면 승점·골득실 기준으로 자동 전환됩니다."}
       </div>
-      <div style={{display:"flex", fontSize:10.5, color:T.muted, padding:"4px 4px", borderBottom:`1px solid ${T.borderHi}`}}>
+      <div style={{display:"flex", fontSize:10, color:T.muted, padding:"4px 4px", borderBottom:`1px solid ${T.borderHi}`}}>
         <span style={{width:22}}>#</span>
         <span style={{flex:1}}>팀</span>
         <span style={{width:26, textAlign:"center"}}>경기</span>
@@ -3518,10 +3540,10 @@ function StandingsTab({ leagueKey }) {
             <TeamCrest name={r.team} size={20}/>
             <span style={{fontSize:13, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{r.team}</span>
           </div>
-          <span style={{width:26, textAlign:"center", fontSize:11.5, color:T.muted}}>{r.p}</span>
-          <span style={{width:56, textAlign:"center", fontSize:11, color:T.muted}}>{r.w}-{r.d}-{r.l}</span>
-          <span style={{width:34, textAlign:"center", fontSize:11.5, color: r.gd>0?T.green:(r.gd<0?T.red:T.muted)}}>{r.gd>0?`+${r.gd}`:r.gd}</span>
-          <span style={{width:32, textAlign:"center", fontSize:12.5, color:T.text, fontWeight:700}}>{r.pts}</span>
+          <span style={{width:26, textAlign:"center", fontSize:12, color:T.muted}}>{r.p}</span>
+          <span style={{width:56, textAlign:"center", fontSize:12, color:T.muted}}>{r.w}-{r.d}-{r.l}</span>
+          <span style={{width:34, textAlign:"center", fontSize:12, color: r.gd>0?T.green:(r.gd<0?T.red:T.muted)}}>{r.gd>0?`+${r.gd}`:r.gd}</span>
+          <span style={{width:32, textAlign:"center", fontSize:13, color:T.text, fontWeight:700}}>{r.pts}</span>
         </div>
       ))}
     </Card>
@@ -3571,20 +3593,20 @@ function EloDeltaDiagPanel({ leagueKey }) {
   return (
     <Card>
       <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>🔧 진단: 동적 ELO 델타 (개발자용)</div>
-      <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>
+      <div style={{fontSize:10, color:T.dim, marginBottom:8}}>
         감쇠계수(현재 0.85, 실측 근거 없이 잠정 설정) 튜닝 판단용 기록입니다. 예측 결과에는 영향 없어요.
         아래 "복사" 버튼으로 통째로 복사해서 전달하면 됩니다.
       </div>
 
-      <div style={{fontSize:11, color:T.muted, fontWeight:700, marginBottom:4}}>
+      <div style={{fontSize:12, color:T.muted, fontWeight:700, marginBottom:4}}>
         현재 델타 (|값| ≥ 0.5인 팀만, {liveDeltas.length}개)
       </div>
       {liveDeltas.length === 0 ? (
-        <div style={{fontSize:11.5, color:T.muted, marginBottom:10}}>현재 유의미한 델타 없음</div>
+        <div style={{fontSize:12, color:T.muted, marginBottom:10}}>현재 유의미한 델타 없음</div>
       ) : (
         <div style={{display:"flex", flexWrap:"wrap", gap:6, marginBottom:10}}>
           {liveDeltas.map(([team, v]) => (
-            <span key={team} style={{fontSize:11, padding:"3px 8px", borderRadius:8,
+            <span key={team} style={{fontSize:12, padding:"3px 8px", borderRadius:8,
               background: v > 0 ? "rgba(41,121,255,0.15)" : "rgba(255,82,82,0.15)",
               color: v > 0 ? T.accent : T.red}}>
               {team} {v > 0 ? "+" : ""}{v.toFixed(1)}
@@ -3593,7 +3615,7 @@ function EloDeltaDiagPanel({ leagueKey }) {
         </div>
       )}
 
-      <div style={{fontSize:11, color:T.muted, fontWeight:700, marginBottom:4}}>
+      <div style={{fontSize:12, color:T.muted, fontWeight:700, marginBottom:4}}>
         저장된 진단로그 ({log === null ? "불러오는 중..." : `${log.length}건`})
       </div>
       {log !== null && log.length > 0 && (
@@ -3606,19 +3628,19 @@ function EloDeltaDiagPanel({ leagueKey }) {
           <div style={{display:"flex", gap:8}}>
             <button onClick={handleCopy}
               style={{flex:1, padding:"8px 0", borderRadius:9, border:`1px solid ${T.accent}`,
-                background: copied ? T.accentDim : "transparent", color:T.accent, fontSize:11.5, cursor:"pointer"}}>
+                background: copied ? T.accentDim : "transparent", color:T.accent, fontSize:12, cursor:"pointer"}}>
               {copied ? "✅ 복사됨" : "📋 전체 복사"}
             </button>
             <button onClick={handleClear} disabled={clearing}
               style={{flex:1, padding:"8px 0", borderRadius:9, border:`1px solid ${T.border}`,
-                background:"transparent", color:T.muted, fontSize:11.5, cursor: clearing ? "default" : "pointer"}}>
+                background:"transparent", color:T.muted, fontSize:12, cursor: clearing ? "default" : "pointer"}}>
               {clearing ? "삭제 중..." : "🗑️ 로그만 초기화"}
             </button>
           </div>
         </>
       )}
       {log !== null && log.length === 0 && (
-        <div style={{fontSize:11.5, color:T.muted}}>
+        <div style={{fontSize:12, color:T.muted}}>
           아직 기록 없음 — 새 종료경기가 파이프라인에 반영될 때마다 자동으로 쌓입니다(경기 있는 날 기준 하루 몇 건).
         </div>
       )}
@@ -3666,7 +3688,7 @@ function SettingsTab({ leagueKey, favorites, onToggleFavorite, onDataReset, noti
     <div>
       <Card>
         <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>🎨 화면 테마</div>
-        <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>다크/라이트 모드를 전환합니다 (기기에 저장되어 다음에도 유지됩니다)</div>
+        <div style={{fontSize:10, color:T.dim, marginBottom:8}}>다크/라이트 모드를 전환합니다 (기기에 저장되어 다음에도 유지됩니다)</div>
         <div style={{display:"flex", gap:8}}>
           {[{k:"dark", label:"🌙 다크"}, {k:"light", label:"☀️ 라이트"}, {k:"system", label:"🖥️ 시스템"}].map(opt => (
             <button key={opt.k} onClick={() => onChangeTheme && onChangeTheme(opt.k)}
@@ -3683,28 +3705,28 @@ function SettingsTab({ leagueKey, favorites, onToggleFavorite, onDataReset, noti
 
       <Card>
         <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>🔔 킥오프 알림</div>
-        <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>
+        <div style={{fontSize:10, color:T.dim, marginBottom:8}}>
           즐겨찾기 팀 경기 30분 전·10분 전에 알림을 보내드립니다. 이 앱(또는 이 리그 탭)이 열려 있는 동안만 동작해요.
         </div>
-        <label style={{display:"flex", alignItems:"center", gap:8, fontSize:12.5, color:T.text}}>
+        <label style={{display:"flex", alignItems:"center", gap:8, fontSize:13, color:T.text}}>
           <input type="checkbox" checked={!!notifyEnabled} onChange={e => onToggleNotify && onToggleNotify(e.target.checked)}/>
           알림 사용 {typeof Notification !== "undefined" && Notification.permission === "denied" && (
-            <span style={{color:T.red, fontSize:11}}>(브라우저 알림 권한이 차단되어 있어요 — 브라우저 설정에서 허용해주세요)</span>
+            <span style={{color:T.red, fontSize:12}}>(브라우저 알림 권한이 차단되어 있어요 — 브라우저 설정에서 허용해주세요)</span>
           )}
         </label>
-        <div style={{marginTop:10, fontSize:11, color:T.muted, fontWeight:700}}>다가오는 즐겨찾기 팀 경기</div>
+        <div style={{marginTop:10, fontSize:12, color:T.muted, fontWeight:700}}>다가오는 즐겨찾기 팀 경기</div>
         {(favorites||[]).length === 0 ? (
           <div style={{fontSize:12, color:T.muted, marginTop:6}}>즐겨찾기한 팀이 없습니다. 아래에서 추가해보세요.</div>
         ) : upcomingFavMatches.length === 0 ? (
           <div style={{fontSize:12, color:T.muted, marginTop:6}}>예정된 경기가 없습니다.</div>
         ) : (
           upcomingFavMatches.map((g, i) => (
-            <div key={i} style={{fontSize:12.5, color:T.text, padding:"6px 0", borderBottom: i<upcomingFavMatches.length-1 ? `1px solid ${T.border}` : "none",
+            <div key={i} style={{fontSize:13, color:T.text, padding:"6px 0", borderBottom: i<upcomingFavMatches.length-1 ? `1px solid ${T.border}` : "none",
               display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}>
                 <TeamCrest name={g.home} size={18}/> {g.home} vs {g.away} <TeamCrest name={g.away} size={18}/>
               </span>
-              <span style={{color:T.muted, fontSize:11}}>{g.date} {g.time} KST</span>
+              <span style={{color:T.muted, fontSize:12}}>{g.date} {g.time} KST</span>
             </div>
           ))
         )}
@@ -3712,13 +3734,13 @@ function SettingsTab({ leagueKey, favorites, onToggleFavorite, onDataReset, noti
 
       <Card>
         <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:2}}>⭐ 즐겨찾기 팀 ({lg.label})</div>
-        <div style={{fontSize:10.5, color:T.dim, marginBottom:8}}>탭해서 즐겨찾기 추가/해제</div>
+        <div style={{fontSize:10, color:T.dim, marginBottom:8}}>탭해서 즐겨찾기 추가/해제</div>
         <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
           {lg.teams.map(t => {
             const active = (favorites||[]).includes(t);
             return (
               <button key={t} onClick={() => onToggleFavorite && onToggleFavorite(t)}
-                style={{padding:"6px 10px", borderRadius:20, fontSize:11.5, cursor:"pointer",
+                style={{padding:"6px 10px", borderRadius:20, fontSize:12, cursor:"pointer",
                   border: active ? `1px solid ${T.gold}` : `1px solid ${T.border}`,
                   background: active ? "rgba(245,166,35,0.15)" : T.surface,
                   color: active ? T.gold : T.muted}}>
@@ -3800,7 +3822,7 @@ function ScheduleTab({ leagueKey, onSelectMatch }) {
       <Card>
         <div style={{textAlign:"center", padding:"20px 8px"}}>
           <div style={{fontSize:28, marginBottom:8}}>📅</div>
-          <div style={{fontSize:13.5, color:T.text, fontWeight:700, marginBottom:6}}>
+          <div style={{fontSize:13, color:T.text, fontWeight:700, marginBottom:6}}>
             {lg.label} 일정이 아직 연동되지 않았습니다
           </div>
           <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
@@ -3832,31 +3854,43 @@ function ScheduleTab({ leagueKey, onSelectMatch }) {
   const renderDateCard = (date) => (
     <Card key={date}>
       <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
-        <span style={{fontSize:12.5, fontWeight:800, color: date < today ? T.muted : date === today ? T.gold : T.cyan}}>
+        <span style={{fontSize:13, fontWeight:800, color: date < today ? T.muted : date === today ? T.gold : T.cyan}}>
           📅 {date}
         </span>
-        {date === today && <span style={{fontSize:11, padding:"2px 8px", borderRadius:10, background:"rgba(245,166,35,0.2)", color:T.gold, fontWeight:700}}>오늘</span>}
-        {date < today && <span style={{fontSize:11, color:T.dim}}>종료</span>}
+        {date === today && <span style={{fontSize:12, padding:"2px 8px", borderRadius:10, background:"rgba(245,166,35,0.2)", color:T.gold, fontWeight:700}}>오늘</span>}
+        {date < today && <span style={{fontSize:12, color:T.dim}}>종료</span>}
       </div>
       {byDate[date].map((g, i) => (
         <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 4px",
           borderBottom: i<byDate[date].length-1 ? `1px solid ${T.border}` : "none"}}>
-          <span style={{color:T.muted, fontSize:11, width:44, flexShrink:0, display:"flex", flexDirection:"column"}}>
+          <span style={{color:T.muted, fontSize:12, width:44, flexShrink:0, display:"flex", flexDirection:"column"}}>
             <span>{g.time ? `${g.time}` : ""}</span>
-            {g.friendly && <span style={{fontSize:8.5, color:T.gold, fontWeight:700}}>친선</span>}
+            {g.friendly && <span style={{fontSize:10, color:T.gold, fontWeight:700}}>친선</span>}
           </span>
           <div style={{flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8, minWidth:0}}>
             <TeamCrest name={g.home} size={22}/>
-            <span style={{color:T.text, fontSize:12.5, textAlign:"right", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.home}</span>
-            <span style={{color:T.dim, fontSize:11}}>vs</span>
-            <span style={{color:T.text, fontSize:12.5, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.away}</span>
+            <span style={{color:T.text, fontSize:13, textAlign:"right", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.home}</span>
+            <span style={{color:T.dim, fontSize:12}}>vs</span>
+            <span style={{color:T.text, fontSize:13, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g.away}</span>
             <TeamCrest name={g.away} size={22}/>
           </div>
           {onSelectMatch && (
-            <button onClick={() => onSelectMatch(g.home, g.away)}
-              title="이 매치업으로 예측 보기"
-              style={{marginLeft:6, flexShrink:0, padding:"5px 10px", borderRadius:7, border:"none",
-                background:T.accent, color:"#fff", fontSize:12, fontWeight:800, cursor:"pointer"}}>▶</button>
+            ALL_TRACKED_TEAMS.has(g.home) && ALL_TRACKED_TEAMS.has(g.away) ? (
+              <button onClick={() => onSelectMatch(g.home, g.away)}
+                title="이 매치업으로 예측 보기"
+                style={{marginLeft:6, flexShrink:0, padding:"5px 10px", borderRadius:7, border:"none",
+                  background:T.accent, color:"#fff", fontSize:12, fontWeight:800, cursor:"pointer"}}>▶</button>
+            ) : (
+              // 2026-08-02 수정: "다른 리그 소속이면 무조건 막기"였다가,
+              // 그럼 챔스/유로파는 어떻게 예측하냐는 지적을 받고 정정함 —
+              // ELO를 8개리그 전체 병합했으니 우리가 트래킹하는 리그
+              // 소속이면(리그 안 가리고) 이제 실제로 예측 가능하다. 여기
+              // 안내 문구가 뜨는 건 상대가 우리가 아예 트래킹 안 하는
+              // 팀(하위리그·타대륙 등, ELO 자체가 없음)일 때뿐.
+              <span style={{marginLeft:6, flexShrink:0, fontSize:10, color:T.dim, textAlign:"right", maxWidth:64}}>
+                예측 미지원<br/>(비트래킹 상대)
+              </span>
+            )
           )}
         </div>
       ))}
@@ -3868,7 +3902,7 @@ function ScheduleTab({ leagueKey, onSelectMatch }) {
       <Card>
         <button onClick={() => downloadICS(`${lg.label}_일정.ics`, generateICS(lg.label, SCHEDULE))}
           style={{width:"100%", padding:"10px 0", borderRadius:9, border:`1px solid ${T.border}`,
-                  background:T.surface, color:T.text, fontSize:12.5, fontWeight:700, cursor:"pointer"}}>
+                  background:T.surface, color:T.text, fontSize:13, fontWeight:700, cursor:"pointer"}}>
           📅 {lg.label} 일정 캘린더로 내보내기 (.ics)
         </button>
       </Card>
@@ -3897,14 +3931,14 @@ function ScheduleTab({ leagueKey, onSelectMatch }) {
       {selectedMonth ? (
         monthDates.length === 0 ? (
           <Card style={{marginTop:10, textAlign:"center"}}>
-            <div style={{fontSize:12.5, color:T.muted}}>해당 월 경기가 없습니다.</div>
+            <div style={{fontSize:13, color:T.muted}}>해당 월 경기가 없습니다.</div>
           </Card>
         ) : monthDates.map(renderDateCard)
       ) : (
         <React.Fragment>
           {upcomingDates.length === 0 && (
             <Card style={{marginTop:10, textAlign:"center"}}>
-              <div style={{fontSize:12.5, color:T.muted}}>예정된 경기가 없습니다.</div>
+              <div style={{fontSize:13, color:T.muted}}>예정된 경기가 없습니다.</div>
             </Card>
           )}
           {upcomingDates.map(renderDateCard)}
@@ -3912,7 +3946,7 @@ function ScheduleTab({ leagueKey, onSelectMatch }) {
             <div style={{marginTop:14}}>
               <button onClick={() => setShowPast(s => !s)}
                 style={{width:"100%", padding:"10px 0", borderRadius:9, border:`1px solid ${T.border}`,
-                        background:T.surface, color:T.muted, fontSize:12.5, fontWeight:700, cursor:"pointer"}}>
+                        background:T.surface, color:T.muted, fontSize:13, fontWeight:700, cursor:"pointer"}}>
                 {showPast
                   ? "▲ 종료된 경기 숨기기"
                   : `▼ 종료된 경기 보기 (${pastDates.reduce((n,dt)=>n+byDate[dt].length,0)}경기)`}
@@ -3977,7 +4011,7 @@ function AccuracyPanel({ history }) {
   if (!stats) {
     return (
       <Card>
-        <div style={{fontSize:12.5, color:T.muted, textAlign:"center"}}>
+        <div style={{fontSize:13, color:T.muted, textAlign:"center"}}>
           정산된 예측이 쌓이면 여기에 브라이어 스코어와 캘리브레이션 분석이 표시됩니다.
         </div>
       </Card>
@@ -3988,24 +4022,24 @@ function AccuracyPanel({ history }) {
   return (
     <Card>
       <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:2}}>🎯 예측 정확도 분석</div>
-      <div style={{fontSize:10.5, color:T.muted, marginBottom:10}}>정산 완료 {stats.n}경기 기준</div>
+      <div style={{fontSize:10, color:T.muted, marginBottom:10}}>정산 완료 {stats.n}경기 기준</div>
       <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12}}>
         <div style={{background:T.surface, borderRadius:9, padding:"10px 8px", border:`1px solid ${T.border}`, textAlign:"center"}}>
-          <div style={{fontSize:20, fontWeight:900, color:brierColor}}>{stats.brierScore.toFixed(3)}</div>
+          <div style={{fontSize:19, fontWeight:900, color:brierColor}}>{stats.brierScore.toFixed(3)}</div>
           <div style={{fontSize:10, color:T.muted, marginTop:2}}>브라이어 스코어(낮을수록 좋음)</div>
-          <div style={{fontSize:9.5, color:brierColor, marginTop:2, fontWeight:700}}>{brierComment}</div>
+          <div style={{fontSize:10, color:brierColor, marginTop:2, fontWeight:700}}>{brierComment}</div>
         </div>
         <div style={{background:T.surface, borderRadius:9, padding:"10px 8px", border:`1px solid ${T.border}`, textAlign:"center"}}>
-          <div style={{fontSize:20, fontWeight:900, color:T.accent}}>{(stats.dirHitRate*100).toFixed(0)}%</div>
+          <div style={{fontSize:19, fontWeight:900, color:T.accent}}>{(stats.dirHitRate*100).toFixed(0)}%</div>
           <div style={{fontSize:10, color:T.muted, marginTop:2}}>방향 적중률</div>
-          <div style={{fontSize:9.5, color:T.muted, marginTop:2}}>스코어 정확 {(stats.exactHitRate*100).toFixed(0)}%</div>
+          <div style={{fontSize:10, color:T.muted, marginTop:2}}>스코어 정확 {(stats.exactHitRate*100).toFixed(0)}%</div>
         </div>
       </div>
       {stats.n >= 5 && (
         <React.Fragment>
-          <div style={{fontSize:11.5, fontWeight:700, color:T.text, marginBottom:6}}>확신도 구간별 실제 적중률</div>
+          <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:6}}>확신도 구간별 실제 적중률</div>
           {stats.buckets.map(b => (
-            <div key={b.range} style={{display:"flex", justifyContent:"space-between", fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}`}}>
+            <div key={b.range} style={{display:"flex", justifyContent:"space-between", fontSize:12, padding:"4px 0", borderBottom:`1px solid ${T.border}`}}>
               <span style={{color:T.muted}}>{b.range} ({b.count}건)</span>
               <span style={{color:T.text}}>실제 {(b.actualHitRate*100).toFixed(0)}%</span>
             </div>
@@ -4054,7 +4088,7 @@ function ModelVsMarketPanel({history}) {
     return (
       <Card>
         <div style={{fontSize:12, fontWeight:700, color:T.text}}>📐 모델 vs 시장배당 괴리</div>
-        <div style={{fontSize:11.5, color:T.muted, textAlign:"center", marginTop:8}}>
+        <div style={{fontSize:12, color:T.muted, textAlign:"center", marginTop:8}}>
           시장배당과 함께 정산된 예측이 5건 이상 쌓이면 표시됩니다{bias ? ` (현재 ${bias.n}건)` : ""}.
         </div>
       </Card>
@@ -4066,17 +4100,17 @@ function ModelVsMarketPanel({history}) {
   return (
     <Card>
       <div style={{fontSize:12, fontWeight:700, color:T.text}}>📐 모델 vs 시장배당 괴리</div>
-      <div style={{fontSize:10.5, color:T.dim, marginTop:2, marginBottom:8}}>정산 {bias.n}건 기준</div>
+      <div style={{fontSize:10, color:T.dim, marginTop:2, marginBottom:8}}>정산 {bias.n}건 기준</div>
       <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
         <div style={{background:T.surface, borderRadius:9, padding:"10px 8px", border:`1px solid ${T.border}`, textAlign:"center"}}>
-          <div style={{fontSize:18, fontWeight:900, color:biasColor}}>{biasPct>=0?"+":""}{biasPct.toFixed(1)}%p</div>
+          <div style={{fontSize:16, fontWeight:900, color:biasColor}}>{biasPct>=0?"+":""}{biasPct.toFixed(1)}%p</div>
           <div style={{fontSize:10, color:T.muted, marginTop:2}}>평균 편향(모델−시장)</div>
-          <div style={{fontSize:9.5, color:biasColor, marginTop:2, fontWeight:700}}>{biasLabel}</div>
+          <div style={{fontSize:10, color:biasColor, marginTop:2, fontWeight:700}}>{biasLabel}</div>
         </div>
         <div style={{background:T.surface, borderRadius:9, padding:"10px 8px", border:`1px solid ${T.border}`, textAlign:"center"}}>
-          <div style={{fontSize:18, fontWeight:900, color: bias.modelCloserRate>0.5 ? T.green : T.red}}>{(bias.modelCloserRate*100).toFixed(0)}%</div>
+          <div style={{fontSize:16, fontWeight:900, color: bias.modelCloserRate>0.5 ? T.green : T.red}}>{(bias.modelCloserRate*100).toFixed(0)}%</div>
           <div style={{fontSize:10, color:T.muted, marginTop:2}}>모델이 시장보다 정확했던 비율</div>
-          <div style={{fontSize:9.5, color:T.dim, marginTop:2}}>모델 {bias.modelBrier.toFixed(3)} · 시장 {bias.marketBrier.toFixed(3)}</div>
+          <div style={{fontSize:10, color:T.dim, marginTop:2}}>모델 {bias.modelBrier.toFixed(3)} · 시장 {bias.marketBrier.toFixed(3)}</div>
         </div>
       </div>
     </Card>
@@ -4114,7 +4148,7 @@ function AutoResultRow({ leagueKey, game }) {
     <div style={{ padding: "8px 0", borderTop: `1px solid ${T.border}`, fontSize: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ color: T.dim, fontSize: 10 }}>{game.date || "-"}</span>
-        <span style={{ color: badge.color, fontWeight: 700, fontSize: 11 }}>{badge.label}</span>
+        <span style={{ color: badge.color, fontWeight: 700, fontSize: 12 }}>{badge.label}</span>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 3 }}>
         <span style={{ flex: 1, display: "flex", alignItems: "center", gap: 4 }}>
@@ -4127,7 +4161,7 @@ function AutoResultRow({ leagueKey, game }) {
           {game.away}<TeamCrest name={game.away} size={16} />
         </span>
       </div>
-      <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>
+      <div style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>
         모델(사후계산): {game.home} {(pred.homeWinProb * 100).toFixed(0)}% · 무 {(pred.drawProb * 100).toFixed(0)}% · {game.away} {(pred.awayWinProb * 100).toFixed(0)}%
         {topScore ? ` · 예상 ${topScore}` : ""}
       </div>
@@ -4173,7 +4207,7 @@ function RecentFormPanel({ home, away }) {
 
   const TeamColumn = ({ team, form, summary }) => (
     <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 800, color: T.text, marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: T.text, marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}>
         <TeamCrest name={team} size={18} /> {team}
       </div>
       {form.length ? (
@@ -4182,18 +4216,18 @@ function RecentFormPanel({ home, away }) {
             {form.map((m, i) => (
               <div key={i} title={`${resultKr(m.r)} ${m.gf}-${m.ga} vs ${m.opp}`}
                 style={{ width: 20, height: 20, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center",
-                  background: T.surface, border: `1px solid ${resultColor(m.r)}`, color: resultColor(m.r), fontSize: 10.5, fontWeight: 800 }}>
+                  background: T.surface, border: `1px solid ${resultColor(m.r)}`, color: resultColor(m.r), fontSize: 10, fontWeight: 800 }}>
                 {resultKr(m.r)}
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 10.5, color: T.muted }}>
+          <div style={{ fontSize: 10, color: T.muted }}>
             <span style={{ color: T.text, fontWeight: 700 }}>{summary.record}</span>
             <span style={{ marginLeft: 6 }}>· {summary.gf}득 {summary.ga}실 · 폼승점 {summary.pts}/15</span>
           </div>
         </>
       ) : (
-        <div style={{ fontSize: 11, color: T.dim, padding: "6px 0" }}>최근 경기 데이터 없음</div>
+        <div style={{ fontSize: 12, color: T.dim, padding: "6px 0" }}>최근 경기 데이터 없음</div>
       )}
     </div>
   );
@@ -4203,7 +4237,7 @@ function RecentFormPanel({ home, away }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: open ? 8 : 0 }}>
         <div style={{ fontSize: 13, fontWeight: 800, color: T.text }}>📋 최근 5경기 폼 (파이프라인 실측)</div>
         <button onClick={() => setOpen(v => !v)}
-          style={{ padding: "4px 10px", borderRadius: 7, border: `1px solid ${T.border}`, background: "transparent", color: T.muted, fontSize: 11, cursor: "pointer" }}>
+          style={{ padding: "4px 10px", borderRadius: 7, border: `1px solid ${T.border}`, background: "transparent", color: T.muted, fontSize: 12, cursor: "pointer" }}>
           {open ? "접기" : "펼치기"}
         </button>
       </div>
@@ -4242,7 +4276,7 @@ function AutoRecentResultsCard({ leagueKey }) {
       <div style={{ fontSize: 13, fontWeight: 800, color: T.text, marginBottom: 2 }}>
         📡 자동 기록 (파이프라인 실측 결과, 총 {finished.length}건)
       </div>
-      <div style={{ fontSize: 10.5, color: T.dim, marginBottom: 8, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 10, color: T.dim, marginBottom: 8, lineHeight: 1.5 }}>
         따로 저장 안 해도 파이프라인이 잡은 종료경기가 자동으로 뜹니다.
         ⚠️ 경기 전 미리 건 예측이 아니라 지금 모델로 사후 계산한 것이라(그
         사이 ELO/xG가 이미 이 결과를 반영했을 수 있음) 순수 사전예측 검증은
@@ -4254,7 +4288,7 @@ function AutoRecentResultsCard({ leagueKey }) {
       {finished.length > shown.length && (
         <button onClick={() => setLimit(l => l + 30)}
           style={{ width: "100%", padding: "8px 0", marginTop: 6, borderRadius: 8, border: `1px solid ${T.border}`,
-                   background: "transparent", color: T.muted, fontSize: 11.5, cursor: "pointer" }}>
+                   background: "transparent", color: T.muted, fontSize: 12, cursor: "pointer" }}>
           더보기 ({finished.length - shown.length}건 더)
         </button>
       )}
@@ -4341,14 +4375,14 @@ function HistoryTab({ leagueKey }) {
     <div>
       <Card>
         <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, textAlign:"center"}}>
-          <div><div style={{fontSize:18, fontWeight:800, color:T.text}}>{history.length}</div><div style={{fontSize:10, color:T.muted}}>저장</div></div>
-          <div><div style={{fontSize:18, fontWeight:800, color:T.muted}}>{history.length - settled.length}</div><div style={{fontSize:10, color:T.muted}}>미정산</div></div>
-          <div><div style={{fontSize:18, fontWeight:800, color:T.cyan}}>{dirHits}/{settled.length}</div><div style={{fontSize:10, color:T.muted}}>방향적중</div></div>
-          <div><div style={{fontSize:18, fontWeight:800, color:T.green}}>{exactHits}/{settled.length}</div><div style={{fontSize:10, color:T.muted}}>스코어적중</div></div>
+          <div><div style={{fontSize:16, fontWeight:800, color:T.text}}>{history.length}</div><div style={{fontSize:10, color:T.muted}}>저장</div></div>
+          <div><div style={{fontSize:16, fontWeight:800, color:T.muted}}>{history.length - settled.length}</div><div style={{fontSize:10, color:T.muted}}>미정산</div></div>
+          <div><div style={{fontSize:16, fontWeight:800, color:T.cyan}}>{dirHits}/{settled.length}</div><div style={{fontSize:10, color:T.muted}}>방향적중</div></div>
+          <div><div style={{fontSize:16, fontWeight:800, color:T.green}}>{exactHits}/{settled.length}</div><div style={{fontSize:10, color:T.muted}}>스코어적중</div></div>
         </div>
         {settled.length > 0 && (
           <div style={{marginTop:8, padding:"6px 0", borderTop:`1px solid ${T.border}`, textAlign:"center"}}>
-            <span style={{fontSize:11, color:T.muted}}>방향 적중률 </span>
+            <span style={{fontSize:12, color:T.muted}}>방향 적중률 </span>
             <span style={{fontSize:14, fontWeight:800, color:T.accent}}>{(dirHits/settled.length*100).toFixed(0)}%</span>
           </div>
         )}
@@ -4360,7 +4394,7 @@ function HistoryTab({ leagueKey }) {
 
       {history.length === 0 ? (
         <Card>
-          <div style={{textAlign:"center", padding:"16px 8px", color:T.muted, fontSize:12.5}}>
+          <div style={{textAlign:"center", padding:"16px 8px", color:T.muted, fontSize:13}}>
             아직 저장된 예측이 없습니다. 예측 탭에서 "이 예측 기록에 저장"을 눌러보세요.
           </div>
         </Card>
@@ -4372,9 +4406,9 @@ function HistoryTab({ leagueKey }) {
                 <span style={{fontSize:13, color:T.text, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
                   <TeamCrest name={h.home} size={20}/> {h.home} vs {h.away} <TeamCrest name={h.away} size={20}/>
                 </span>
-                <button onClick={()=>removeEntry(h.id)} style={{background:"none", border:"none", color:T.dim, fontSize:11, cursor:"pointer"}}>삭제</button>
+                <button onClick={()=>removeEntry(h.id)} style={{background:"none", border:"none", color:T.dim, fontSize:12, cursor:"pointer"}}>삭제</button>
               </div>
-              <div style={{fontSize:11, color:T.muted, marginBottom:6}}>
+              <div style={{fontSize:12, color:T.muted, marginBottom:6}}>
                 예측: {h.home} {(h.homeWinProb*100).toFixed(0)}% · 무 {(h.drawProb*100).toFixed(0)}% · {h.away} {(h.awayWinProb*100).toFixed(0)}%
                 {h.topScore && ` · 예상 ${h.topScore}`}
               </div>
@@ -4392,7 +4426,7 @@ function HistoryTab({ leagueKey }) {
                     onChange={e => setSettleInputs(s => ({ ...s, [h.id]: { ...s[h.id], a: e.target.value } }))}
                     style={{width:50, background:T.surface, border:`1px solid ${T.border}`, color:T.text, borderRadius:6, padding:"5px 6px", fontSize:12}}/>
                   <button onClick={()=>settle(h.id)}
-                    style={{flex:1, padding:"6px 0", borderRadius:6, border:"none", background:T.accent, color:"#fff", fontSize:11.5, fontWeight:700, cursor:"pointer"}}>
+                    style={{flex:1, padding:"6px 0", borderRadius:6, border:"none", background:T.accent, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer"}}>
                     결과 입력해서 정산
                   </button>
                 </div>
@@ -4400,7 +4434,7 @@ function HistoryTab({ leagueKey }) {
             </Card>
           ))}
           <button onClick={clearAll}
-            style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${T.border}`, background:"transparent", color:T.dim, fontSize:11.5, cursor:"pointer"}}>
+            style={{width:"100%", padding:"9px 0", borderRadius:10, border:`1px solid ${T.border}`, background:"transparent", color:T.dim, fontSize:12, cursor:"pointer"}}>
             전체 기록 삭제
           </button>
         </React.Fragment>
@@ -4429,13 +4463,13 @@ function TransfersPanel({ team }) {
       <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:8}}>🔄 최근 이적</div>
       {inList.length > 0 && (
         <div style={{marginBottom: outList.length ? 12 : 0}}>
-          <div style={{fontSize:11.5, fontWeight:700, color:T.green, marginBottom:6}}>⬇ 영입</div>
+          <div style={{fontSize:12, fontWeight:700, color:T.green, marginBottom:6}}>⬇ 영입</div>
           <div style={{display:"flex", flexDirection:"column", gap:5}}>
             {inList.map((tr, i) => (
-              <div key={i} style={{fontSize:12.5, color:T.text}}>
+              <div key={i} style={{fontSize:13, color:T.text}}>
                 <b>{tr.player}</b>
                 <span style={{color:T.muted}}> ← {tr.from}</span>
-                {tr.date && <span style={{color:T.dim, fontSize:10.5}}> ({fmtDate(tr.date)})</span>}
+                {tr.date && <span style={{color:T.dim, fontSize:10}}> ({fmtDate(tr.date)})</span>}
               </div>
             ))}
           </div>
@@ -4443,13 +4477,13 @@ function TransfersPanel({ team }) {
       )}
       {outList.length > 0 && (
         <div>
-          <div style={{fontSize:11.5, fontWeight:700, color:T.red, marginBottom:6}}>⬆ 이탈</div>
+          <div style={{fontSize:12, fontWeight:700, color:T.red, marginBottom:6}}>⬆ 이탈</div>
           <div style={{display:"flex", flexDirection:"column", gap:5}}>
             {outList.map((tr, i) => (
-              <div key={i} style={{fontSize:12.5, color:T.text}}>
+              <div key={i} style={{fontSize:13, color:T.text}}>
                 <b>{tr.player}</b>
                 <span style={{color:T.muted}}> → {tr.to}</span>
-                {tr.date && <span style={{color:T.dim, fontSize:10.5}}> ({fmtDate(tr.date)})</span>}
+                {tr.date && <span style={{color:T.dim, fontSize:10}}> ({fmtDate(tr.date)})</span>}
               </div>
             ))}
           </div>
@@ -4503,7 +4537,7 @@ function LeaderboardTab({ leagueKey }) {
       <Card>
         <div style={{textAlign:"center", padding:"24px 8px"}}>
           <div style={{fontSize:28, marginBottom:8}}>⚽</div>
-          <div style={{fontSize:13.5, color:T.text, fontWeight:700, marginBottom:6}}>
+          <div style={{fontSize:13, color:T.text, fontWeight:700, marginBottom:6}}>
             {lg.label} 시즌 기록 데이터가 아직 없습니다
           </div>
           <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
@@ -4526,7 +4560,7 @@ function LeaderboardTab({ leagueKey }) {
                 flexShrink:0, padding:"8px 12px", borderRadius:8, border:`1px solid ${T.border}`,
                 background: metric === m.id ? T.accent : T.surface,
                 color: metric === m.id ? "#fff" : T.text,
-                fontSize:12.5, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap",
+                fontSize:13, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap",
               }}>
               {m.label}
             </button>
@@ -4535,7 +4569,7 @@ function LeaderboardTab({ leagueKey }) {
       </Card>
       {leagueKey === "mls" && metric === "assists" && (
         <Card style={{marginTop:10}}>
-          <div style={{fontSize:11.5, color:T.muted, lineHeight:1.6}}>
+          <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
             ⚠️ MLS는 리그 고유 규정으로 <b style={{color:T.text}}>"세컨더리 어시스트"</b>(도움으로
             이어진 패스의 직전 패스도 도움 인정)를 공식 집계에 포함하는데, 이 앱의 데이터 소스는
             골당 도움 1명만 기록해서 이 부분이 반영되지 않습니다. 그래서 이 순위가 mlssoccer.com
@@ -4546,7 +4580,7 @@ function LeaderboardTab({ leagueKey }) {
       )}
       <Card>
         {rows.length === 0 ? (
-          <div style={{fontSize:12.5, color:T.muted, textAlign:"center", padding:"12px 0"}}>
+          <div style={{fontSize:13, color:T.muted, textAlign:"center", padding:"12px 0"}}>
             {curLabel} 기록이 아직 없습니다.
           </div>
         ) : (
@@ -4557,12 +4591,12 @@ function LeaderboardTab({ leagueKey }) {
                 borderTop: i > 0 ? `1px solid ${T.border}` : "none",
               }}>
                 <div style={{
-                  width:22, textAlign:"center", fontSize:12.5, fontWeight:800,
+                  width:22, textAlign:"center", fontSize:13, fontWeight:800,
                   color: i < 3 ? T.gold : T.dim,
                 }}>{i + 1}</div>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:13.5, color:T.text, fontWeight:700}}>{r.name}</div>
-                  {r.team && <div style={{fontSize:11, color:T.muted}}>{r.team}</div>}
+                  <div style={{fontSize:13, color:T.text, fontWeight:700}}>{r.name}</div>
+                  {r.team && <div style={{fontSize:12, color:T.muted}}>{r.team}</div>}
                 </div>
                 <div style={{fontSize:16, fontWeight:900, color:T.accent}}>{r.val}</div>
               </div>
@@ -4598,7 +4632,7 @@ function SquadTab({ leagueKey }) {
       <Card>
         <select value={team} onChange={e => setTeam(e.target.value)}
           style={{width:"100%", padding:"9px 10px", borderRadius:8, border:`1px solid ${T.border}`,
-                  background:T.surface, color:T.text, fontSize:13.5, fontWeight:700}}>
+                  background:T.surface, color:T.text, fontSize:13, fontWeight:700}}>
           {teams.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
       </Card>
@@ -4607,7 +4641,7 @@ function SquadTab({ leagueKey }) {
         <Card>
           <div style={{textAlign:"center", padding:"20px 8px"}}>
             <div style={{fontSize:28, marginBottom:8}}>👥</div>
-            <div style={{fontSize:13.5, color:T.text, fontWeight:700, marginBottom:6}}>
+            <div style={{fontSize:13, color:T.text, fontWeight:700, marginBottom:6}}>
               {team} 스쿼드가 아직 연동되지 않았습니다
             </div>
             <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
@@ -4624,7 +4658,7 @@ function SquadTab({ leagueKey }) {
               <div style={{display:"flex", alignItems:"center", gap:10}}>
                 <TeamCrest name={team} size={38}/>
                 <div>
-                  <div style={{fontSize:17, fontWeight:800, color:T.text}}>{team}</div>
+                  <div style={{fontSize:16, fontWeight:800, color:T.text}}>{team}</div>
                   <div style={{fontSize:12, color:T.muted}}>
                     {lg.label} · 선수 {squad.all.length}명{squad.coach && ` · 감독 ${squad.coach}`}
                   </div>
@@ -4637,7 +4671,7 @@ function SquadTab({ leagueKey }) {
               {xgValid && <div><span style={{color:T.muted}}>xGA </span><b>{xg.xGA.toFixed(2)}</b></div>}
             </div>
             {!xgValid && (
-              <div style={{fontSize:11, color:T.dim, marginTop:8}}>
+              <div style={{fontSize:12, color:T.dim, marginTop:8}}>
                 ⚠️ xG 기록 없음 — 24-25/25-26 시즌 상위리그 경험이 없는 신규 승격팀일 수 있습니다.
               </div>
             )}
@@ -4650,7 +4684,7 @@ function SquadTab({ leagueKey }) {
             const hasFat = fat && Number.isFinite(fat.fatigueScore) && fat.fatigueScore > 0;
             if (!hasInj && !hasFat) return (
               <Card>
-                <div style={{fontSize:11, color:T.dim}}>
+                <div style={{fontSize:12, color:T.dim}}>
                   🩹 부상자 · ✈️ 월드컵 여독 데이터 아직 없음 — 연동되면 여기 자동 표시됩니다.
                 </div>
               </Card>
@@ -4690,10 +4724,10 @@ function SquadTab({ leagueKey }) {
                 if (!names.length) return null;
                 return (
                   <div key={key} style={{marginBottom:12}}>
-                    <div style={{fontSize:11.5, fontWeight:700, color, marginBottom:6}}>{label} · {names.length}명</div>
+                    <div style={{fontSize:12, fontWeight:700, color, marginBottom:6}}>{label} · {names.length}명</div>
                     <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
                       {names.map((p, i) => (
-                        <span key={i} style={{fontSize:12.5, color:T.text, background:T.surface,
+                        <span key={i} style={{fontSize:13, color:T.text, background:T.surface,
                           border:`1px solid ${T.border}`, borderRadius:14, padding:"5px 10px"}}>
                           {p}
                         </span>
@@ -4710,7 +4744,7 @@ function SquadTab({ leagueKey }) {
               </div>
               <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
                 {squad.all.map((p, i) => (
-                  <span key={i} style={{fontSize:12.5, color:T.text, background:T.surface,
+                  <span key={i} style={{fontSize:13, color:T.text, background:T.surface,
                     border:`1px solid ${T.border}`, borderRadius:14, padding:"5px 10px"}}>
                     {p}
                   </span>
@@ -4959,7 +4993,7 @@ function App() {
   return (
     <div style={{maxWidth:520, margin:"0 auto", minHeight:"100vh", paddingBottom:30}}>
       <div style={{padding:"18px 14px 10px", textAlign:"center"}}>
-        <div style={{fontSize:19, fontWeight:900, color:T.text}}>⚽ 8개리그 예측기 <span style={{fontSize:12.5, color:T.cyan, fontWeight:600}}>v0.1</span></div>
+        <div style={{fontSize:19, fontWeight:900, color:T.text}}>⚽ 8개리그 예측기 <span style={{fontSize:13, color:T.cyan, fontWeight:600}}>v0.1</span></div>
       </div>
 
       <LeaguePicker leagueKey={leagueKey} onChange={onSelectLeague}/>
@@ -4972,7 +5006,7 @@ function App() {
               return (
                 <button key={t.id} onClick={()=>setTab(t.id)}
                   style={{flex:"0 0 auto", padding:"7px 12px", borderRadius:20, border:"none", cursor:"pointer",
-                          fontSize:12.5, fontWeight:700, whiteSpace:"nowrap",
+                          fontSize:13, fontWeight:700, whiteSpace:"nowrap",
                           background: tab===t.id ? T.accent : T.surface,
                           color: tab===t.id ? "#fff" : T.muted}}>
                   {t.label}
