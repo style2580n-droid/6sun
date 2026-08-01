@@ -2084,6 +2084,73 @@ function TeamStyleRadarCard({ leagueKey, home, away }) {
   );
 }
 
+// 2026-08-02 신규: 헤더골/페널티골/프리킥골/슈팅/유효슈팅/키패스/드리블/
+// 태클/인터셉트/클리어링/경고/퇴장 — 예전엔 20인 전역 랭킹(LeaderboardTab)
+// 이었는데, "득점/도움/선방처럼 실제 시상 있는 것만 랭킹으로 남기고
+// 나머지는 지금 보는 두 팀끼리 비교하게 해달라"는 피드백 반영. LEADERBOARD
+// 는 선수 단위({"이름|팀": 값})라, 팀 스탯 합계를 여기서 직접 구한다.
+// 출전경기/출전시간은 뺐음 — 스쿼드 인원 많은 팀이 그냥 유리해지는
+// 합계라 팀 대 팀 비교로는 의미가 약함(선수 개인 기록으로 보는 게 맞음).
+function getTeamStatTotal(metric, team) {
+  const src = LEADERBOARD[metric] || {};
+  let sum = 0;
+  for (const key in src) {
+    const idx = key.lastIndexOf("|");
+    if (idx >= 0 && key.slice(idx + 1) === team) sum += (src[key] || 0);
+  }
+  return sum;
+}
+
+function LeaderboardStatsCompareCard({ leagueKey, home, away }) {
+  const ROWS = [
+    { metric: "headerGoals", label: "🎯 헤더골" },
+    { metric: "penaltyGoals", label: "🥅 페널티골" },
+    { metric: "freeKickGoals", label: "🎯 프리킥골" },
+    { metric: "shots", label: "👟 슈팅" },
+    { metric: "sot", label: "🎯 유효슈팅" },
+    { metric: "keyPasses", label: "🔑 키패스" },
+    { metric: "dribbles", label: "⚡ 드리블" },
+    { metric: "tacklesWon", label: "🛡 태클" },
+    { metric: "interceptions", label: "✋ 인터셉트" },
+    { metric: "clearances", label: "🧹 클리어링" },
+    { metric: "yellowCards", label: "🟨 경고", higherBetter: false },
+    { metric: "redCards", label: "🟥 퇴장", higherBetter: false },
+  ];
+  const data = ROWS.map(r => ({
+    ...r,
+    hVal: getTeamStatTotal(r.metric, home),
+    aVal: getTeamStatTotal(r.metric, away),
+  }));
+  const hasAny = data.some(r => r.hVal > 0 || r.aVal > 0);
+  if (!hasAny) return null;
+
+  const StatRow = ({ label, hVal, aVal, higherBetter = true }) => {
+    const hGood = higherBetter ? hVal > aVal : hVal < aVal && aVal > 0;
+    const aGood = higherBetter ? aVal > hVal : aVal < hVal && hVal > 0;
+    return (
+      <div style={{display:"flex", alignItems:"center", gap:6, padding:"5px 0", borderBottom:`1px solid ${T.border}`}}>
+        <span style={{flex:1, textAlign:"right", fontSize:13, fontWeight:700, color: hGood?T.green:T.text}}>{hVal}</span>
+        <span style={{width:110, textAlign:"center", fontSize:11, color:T.muted}}>{label}</span>
+        <span style={{flex:1, textAlign:"left", fontSize:13, fontWeight:700, color: aGood?T.green:T.text}}>{aVal}</span>
+      </div>
+    );
+  };
+
+  return (
+    <Card>
+      <div style={{textAlign:"center", marginBottom:8}}>
+        <span style={{fontSize:12, color:T.muted}}>← {home}</span>
+        <span style={{fontSize:13, fontWeight:700, color:T.text, margin:"0 10px"}}>📋 세부기록 비교</span>
+        <span style={{fontSize:12, color:T.muted}}>{away} →</span>
+      </div>
+      {data.map(r => <StatRow key={r.metric} {...r}/>)}
+      <div style={{fontSize:10.5, color:T.dim, marginTop:6, textAlign:"center"}}>
+        📐 이번 시즌 팀 스쿼드 누적치 비교(경기수 보정 없음) · 초록색 = 비교 우위
+      </div>
+    </Card>
+  );
+}
+
 // ============================================================ 라이브 인플레이 재계산 (EPL 앱 이식)
 function LiveInPlayPanel({home, away, lambdaHome, lambdaAway}) {
   const [active, setActive] = useState(false);
@@ -3213,6 +3280,8 @@ function PredictTab({ leagueKey, pendingMatch }) {
               </Card>
             );
           })()}
+
+          <LeaderboardStatsCompareCard leagueKey={leagueKey} home={home} away={away}/>
 
           <RecentFormPanel home={home} away={away}/>
           </CollapsibleSection>
@@ -4398,20 +4467,17 @@ function LeaderboardTab({ leagueKey }) {
   const lg = LEAGUES[leagueKey];
   const [metric, setMetric] = useState("scorers");
 
-  // 2026-08-01 확장: 득점왕/도움왕 2개뿐이던 걸 11개 카테고리로 확장.
-  // EPL 앱과 달리 8개리그는 SQUADS 기반 경기당 평균(src:"stat") 소스가
-  // 없어서, collect_bsd_player_stats.py가 채운 시즌 누적값(LEADERBOARD의
-  // 단순 {key:숫자} 구조)만으로 전부 구성 — scorers/assists와 완전히
-  // 동일한 형태라 기존 rows 계산 로직을 그대로 재사용 가능.
+  // 2026-08-02 수정: 11개 카테고리를 3개(득점왕/도움왕/선방왕)로 줄였다가,
+  // 출전경기/출전시간은 다시 복원 — "팀 합계 비교"로는 의미 없다는 판단은
+  // 그대로지만(스쿼드 인원 많은 팀이 그냥 유리해지는 함정, 그래서
+  // LeaderboardStatsCompareCard엔 안 넣음), "개인별 순위"로는 여전히
+  // 유효하다는 피드백 반영 — 스쿼드 내에서 누가 꾸준히 기회를 받는
+  // 선수인지(기회창출)를 1인 단위로 보여주는 건 팀 합계와 다른 정보라서.
+  // 나머지(헤더골/페널티골/프리킥골/슈팅/유효슈팅/키패스/드리블/태클/
+  // 인터셉트/클리어링/경고/퇴장)는 여전히 PredictTab의 팀 대 팀 비교로만.
   const METRICS = [
     {id:"scorers", label:"⚽ 득점왕"}, {id:"assists", label:"🎯 도움왕"},
-    {id:"headerGoals", label:"🎯 헤더골"}, {id:"penaltyGoals", label:"🥅 페널티골"},
-    {id:"freeKickGoals", label:"🎯 프리킥골"},
-    {id:"shots", label:"👟 슈팅"}, {id:"sot", label:"🎯 유효슈팅"},
-    {id:"keyPasses", label:"🔑 키패스"}, {id:"dribbles", label:"⚡ 드리블"},
-    {id:"tacklesWon", label:"🛡 태클"}, {id:"interceptions", label:"✋ 인터셉트"},
-    {id:"clearances", label:"🧹 클리어링"}, {id:"saves", label:"🧤 선방"},
-    {id:"yellowCards", label:"🟨 경고"}, {id:"redCards", label:"🟥 퇴장"},
+    {id:"saves", label:"🧤 선방왕"},
     {id:"appearances", label:"📅 출전경기"}, {id:"minutesPlayed", label:"⏱ 출전시간"},
   ];
   const curLabel = METRICS.find(m => m.id === metric)?.label || metric;
@@ -4475,15 +4541,6 @@ function LeaderboardTab({ leagueKey }) {
             골당 도움 1명만 기록해서 이 부분이 반영되지 않습니다. 그래서 이 순위가 mlssoccer.com
             공식 도움왕 순위보다 낮게 나올 수 있어요(예: 2026-07 기준 실제 1위와 최대 4개 차이
             확인됨). 다른 리그는 이 규정이 없어서 영향 없습니다.
-          </div>
-        </Card>
-      )}
-      {(metric === "headerGoals" || metric === "penaltyGoals" || metric === "freeKickGoals") && (
-        <Card style={{marginTop:10}}>
-          <div style={{fontSize:11, color:T.muted, lineHeight:1.6}}>
-            ⚠️ 골 상세정보(헤더/페널티/프리킥 여부)는 이번에 새로 추가된 필드라
-            실측 검증이 진행 중입니다 — 특히 헤더골은 정확한 표기값을 다음
-            파이프라인 실행 로그로 확정하는 중이라 0건이 정상일 수 있어요.
           </div>
         </Card>
       )}
