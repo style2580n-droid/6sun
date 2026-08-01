@@ -2498,14 +2498,6 @@ function LineupInjuryPanel({leagueKey, home, away}) {
   const hasInjuries = injuries && (injuries.home?.length || injuries.away?.length);
   const injurySourceLabel = injuries?.source || "API-FOOTBALL/ESPN";
 
-  // 2026-08-01 추가: 카드 결장위험(옐로누적/레드카드 직전경기). 부상자와
-  // 별개로 CARD_SUSPENSIONS는 라인업 버튼과 무관하게 항상 즉시 표시 가능
-  // (파이프라인이 이미 계산해둔 정적 데이터라 API 호출 불필요).
-  const cardEntries = Object.entries(CARD_SUSPENSIONS || {});
-  const homeCards = cardEntries.filter(([, info]) => info.team === home);
-  const awayCards = cardEntries.filter(([, info]) => info.team === away);
-  const hasCardRisk = homeCards.length > 0 || awayCards.length > 0;
-
   return (
     <Card>
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
@@ -2520,26 +2512,15 @@ function LineupInjuryPanel({leagueKey, home, away}) {
         </button>
       </div>
 
-      {hasCardRisk && (
-        <div style={{marginTop:8, display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
-          {[["home", home, homeCards], ["away", away, awayCards]].map(([side, teamName, cards]) => (
-            cards.length > 0 && (
-              <div key={side}>
-                {cards.map(([name, info], i) => (
-                  <div key={i} style={{fontSize:11.5, color: info.red_on_last_match ? T.red : T.gold}}>
-                    🟨 {name}
-                    <div style={{fontSize:10, color:T.muted}}>
-                      {info.red_on_last_match ? "직전경기 퇴장(결장확정)" : `옐로 ${info.yellow_total}장(정지위험)`}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
-          ))}
-        </div>
-      )}
+      {/* 2026-08-01 수정: 카드 결장위험(옐로누적/레드카드)은 여기서 뺐다 —
+          "킥오프 1시간 전부터 라인업이 채워집니다"라는 문구 아래 같이 있으니
+          카드 정보도 라인업처럼 시간이 지나야 나오는 것처럼 오해를 샀다
+          (사용자 피드백: 과거 경기 기록으로 즉시 계산되는 데이터라 라인업
+          타이밍과 무관한데 왜 묶여있냐). 이제 화면 위쪽 AbsenceSummaryPanel
+          (항상 바로 보이는 곳)에서만 다룬다 — 라인업/API-Football·ESPN
+          부상자만 여기(버튼 눌러야 조회되는 것들)에 남긴다. */}
 
-      {tried && !loading && !hasLineup && !hasInjuries && !hasCardRisk && (
+      {tried && !loading && !hasLineup && !hasInjuries && (
         <div style={{fontSize:11.5, color:T.gold, marginTop:8}}>
           아직 확정 라인업/결장 정보가 없습니다 (킥오프 임박 전이거나 매칭 실패).
         </div>
@@ -3140,10 +3121,18 @@ function PredictTab({ leagueKey, pendingMatch }) {
           <Card>
             <div style={{fontSize:12, fontWeight:700, color:T.text, marginBottom:8}}>예상 스코어 Top 5</div>
             {result.topScores.map((s,i) => (
-              <div key={s.score} style={{display:"flex", justifyContent:"space-between", padding:"5px 2px",
-                borderBottom: i<result.topScores.length-1 ? `1px solid ${T.border}` : "none"}}>
-                <span style={{fontSize:13, color:T.text, fontWeight:700}}>{s.score}</span>
-                <span style={{fontSize:12, color:T.muted}}>{(s.prob*100).toFixed(1)}%</span>
+              <div key={s.score} style={{display:"flex", justifyContent:"space-between", alignItems:"center",
+                padding: i===0 ? "8px 10px" : "5px 2px", marginTop: i===0 ? 0 : 2,
+                borderRadius: i===0 ? 9 : 0,
+                background: i===0 ? "rgba(41,121,255,0.18)" : "transparent",
+                border: i===0 ? `1px solid ${T.accent}` : "none",
+                borderBottom: (i>0 && i<result.topScores.length-1) ? `1px solid ${T.border}` : (i===0 ? undefined : "none")}}>
+                <span style={{display:"flex", alignItems:"center", gap:6}}>
+                  {i===0 && <span style={{fontSize:11}}>🎯</span>}
+                  <span style={{fontSize: i===0?15:13, color: i===0?T.accent:T.text, fontWeight: i===0?900:700,
+                    fontFamily: i===0 ? "monospace" : undefined}}>{s.score}</span>
+                </span>
+                <span style={{fontSize: i===0?13:12, color: i===0?T.accent:T.muted, fontWeight: i===0?800:400}}>{(s.prob*100).toFixed(1)}%</span>
               </div>
             ))}
           </Card>
@@ -3154,6 +3143,8 @@ function PredictTab({ leagueKey, pendingMatch }) {
             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, fontSize:12.5}}>
               <div style={{color:T.muted}}>2.5오버 <span style={{color:T.text, fontWeight:700}}>{(result.overUnder[2.5].over*100).toFixed(0)}%</span></div>
               <div style={{color:T.muted}}>2.5언더 <span style={{color:T.text, fontWeight:700}}>{(result.overUnder[2.5].under*100).toFixed(0)}%</span></div>
+              <div style={{color:T.muted}}>3.5오버 <span style={{color:T.text, fontWeight:700}}>{(result.overUnder[3.5].over*100).toFixed(0)}%</span></div>
+              <div style={{color:T.muted}}>3.5언더 <span style={{color:T.text, fontWeight:700}}>{(result.overUnder[3.5].under*100).toFixed(0)}%</span></div>
               <div style={{color:T.muted}}>양팀득점(BTTS) <span style={{color:T.text, fontWeight:700}}>{(result.marketStats.btts.yes*100).toFixed(0)}%</span></div>
               <div style={{color:T.muted}}>홈 클린시트 <span style={{color:T.text, fontWeight:700}}>{(result.marketStats.cleanSheet.home*100).toFixed(0)}%</span></div>
             </div>
