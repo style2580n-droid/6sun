@@ -1993,6 +1993,19 @@ function getTeamRadarProfile(leagueKey, team) {
     const range = max - min;
     for (const t of teams) norm[t][ax] = range > 1e-9 ? ((raw[t][ax] - min) / range) * 100 : 50;
   }
+  // 2026-08-01 추가: 프리시즌 친선전 상대팀처럼 이 리그 teams 목록에 아예
+  // 없는 팀이면 raw[team]/norm[team]이 undefined가 돼서 화면이 크래시
+  // 났다(EPL 앱에서 실측 확인된 동일 버그 — 8개리그도 동일 구조라 선제
+  // 방어). 데이터 없는 팀은 중립값으로 안전하게 반환.
+  if (!raw[team] || !norm[team]) {
+    const neutralNorm = {};
+    for (const ax of RADAR_AXES) neutralNorm[ax] = 50;
+    return {
+      raw: { "공격(xG)": 1.35, "수비": -1.35, "ELO": 1500 },
+      norm: neutralNorm,
+      noData: true,
+    };
+  }
   return { raw: raw[team], norm: norm[team] };
 }
 
