@@ -2757,6 +2757,22 @@ function parseTeamAbsences(team) {
     seen[mName] = cat;
     out[cat].push({ name: mName, reason: R });
   }
+  // 2026-08-01 추가: compute_card_suspensions.py가 만든 카드 결장위험도 같이
+  // 반영. 레드카드 직전경기는 "red"(확정급), 옐로누적 기준도달은 "warn"으로
+  // 분류 — 위 API-Football/ESPN 텍스트 파싱과 같은 카테고리 체계를 그대로 씀.
+  for (const [name, info] of Object.entries(CARD_SUSPENSIONS || {})) {
+    if (info.team !== team) continue;
+    const cat = info.red_on_last_match ? "red" : (info.yellow_threshold_hit ? "warn" : null);
+    if (!cat) continue;
+    const reason = info.red_on_last_match ? "직전경기 퇴장" : `옐로카드 누적 ${info.yellow_total}장`;
+    if (seen[name] && sevRank[seen[name]] >= sevRank[cat]) continue;
+    if (seen[name]) {
+      const prev = seen[name];
+      out[prev] = out[prev].filter(x => x.name !== name);
+    }
+    seen[name] = cat;
+    out[cat].push({ name, reason });
+  }
   return out;
 }
 
@@ -2778,6 +2794,38 @@ function AbsenceSummaryPanel({home, away}) {
   // 더 정밀하게 λ가 조정된다(EPL과 동일하게 팀 합산 상한 15%p).
   const keyHome = getKeyPlayers(home);
   const keyAway = getKeyPlayers(away);
+
+  // 2026-08-01 추가: 핵심선수 중 부상/카드결장(red·warn·injury — doubt는
+  // 불확실해서 자동체크 제외)에 걸린 이름이 있으면 자동으로 체크해서,
+  // 사용자가 매번 수동으로 찾아 체크할 필요 없게 한다. 경기(home vs away)당
+  // 한 번만 자동체크하고, 그 이후 사용자가 직접 해제하면 그 선택을 존중
+  // (재자동체크로 덮어쓰지 않음) — window.__autoCheckedMatches로 추적.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!window.__autoCheckedMatches) window.__autoCheckedMatches = new Set();
+    const matchKey = `${home}|${away}`;
+    if (window.__autoCheckedMatches.has(matchKey)) return;
+    window.__autoCheckedMatches.add(matchKey);
+
+    let changed = false;
+    for (const [team, keyPlayers] of [[home, keyHome], [away, keyAway]]) {
+      const abs = parseTeamAbsences(team);
+      const autoNames = new Set([
+        ...abs.red.map(p => p.name), ...abs.warn.map(p => p.name),
+        ...abs.injury.map(p => p.name),
+      ]);
+      for (const kp of keyPlayers) {
+        if (!autoNames.has(kp.name)) continue;
+        if (!window.__absentPlayers[team]) window.__absentPlayers[team] = new Set();
+        if (!window.__absentPlayers[team].has(kp.name)) {
+          window.__absentPlayers[team].add(kp.name);
+          changed = true;
+        }
+      }
+    }
+    if (changed) setAbsentTick(t => t + 1);
+  }, [home, away, keyHome.length, keyAway.length]);
+
   function toggleAbsent(team, name) {
     if (typeof window === "undefined") return;
     if (!window.__absentPlayers[team]) window.__absentPlayers[team] = new Set();
@@ -3059,10 +3107,13 @@ function PredictTab({ leagueKey, pendingMatch }) {
             <Bar label={`${away} 승`} value={result.awayWinProb} color={T.red}/>
           </Card>
 
+          {/* 2026-08-01 이동: 예전엔 "예측 근거" 접이식 안에 있어서 펼쳐야만
+              보였음(사용자 피드백: 찾기 어려움) — 결장 체크는 예측에 즉시
+              영향을 주는 핵심 기능이라 확률 바로 아래 항상 보이는 위치로 뺌. */}
+          <AbsenceSummaryPanel home={home} away={away}/>
+
           <CollapsibleSection title="🔍 예측 근거 & 상대전적">
             <TeamStyleRadarCard leagueKey={leagueKey} home={home} away={away}/>
-
-            <AbsenceSummaryPanel home={home} away={away}/>
 
             <PredictionExplainCard home={home} away={away} result={result}/>
 
