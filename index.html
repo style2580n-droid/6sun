@@ -3126,7 +3126,9 @@ function PredictTab({ leagueKey, pendingMatch }) {
           <AbsenceSummaryPanel home={home} away={away}/>
 
           <CollapsibleSection title="🔍 예측 근거 & 상대전적">
-            <TeamStyleRadarCard leagueKey={leagueKey} home={home} away={away}/>
+            <ErrorBoundary>
+              <TeamStyleRadarCard leagueKey={leagueKey} home={home} away={away}/>
+            </ErrorBoundary>
 
             <PredictionExplainCard home={home} away={away} result={result}/>
 
