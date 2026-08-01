@@ -199,6 +199,15 @@ function seedAbbr(leagueKey, teams) {
   return o;
 }
 
+// 2026-08-01 긴급수정: 아래 aggregateTeamPlayers()가 STATIC_MATCH_STATS를
+// 참조하는데(구 데이터 호환용 폴백), 이 파일엔 선언 자체가 없어서
+// "STATIC_MATCH_STATS is not defined"로 화면 전체가 죽고 있었다(실측
+// 확인 — 사용자 스크린샷). EPL 앱은 app_export.py가 실제 데이터로 채워
+// 넣지만, 8개리그 앱은 이 데이터 소스 자체가 없으므로 빈 객체로 안전하게
+// 선언 — TEAM_GROUP_GAMES가 있으면 이 폴백 자체가 실행 안 되니 빈 객체로
+// 충분하다.
+const STATIC_MATCH_STATS = {};
+
 const LEAGUES = {
   laliga: {
     label: "라리가",
