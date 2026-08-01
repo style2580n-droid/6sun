@@ -1965,7 +1965,7 @@ function Bar({ label, value, color }) {
 
 function LeaguePicker({ leagueKey, onChange }) {
   return (
-    <div style={{display:"flex", overflowX:"auto", gap:6, padding:"0 12px 10px"}}>
+    <div style={{display:"flex", flexWrap:"wrap", gap:6, padding:"0 12px 10px"}}>
       {LEAGUE_ORDER.map(k => (
         <button key={k} onClick={()=>onChange(k)}
           style={{flex:"0 0 auto", padding:"7px 12px", borderRadius:16, border:`1px solid ${leagueKey===k?T.accent:T.border}`,
@@ -4964,9 +4964,9 @@ function App() {
 
       <LeaguePicker leagueKey={leagueKey} onChange={onSelectLeague}/>
 
-      <div style={{display:"flex", overflowX:"auto", gap:14, padding:"0 12px 10px", borderBottom:`1px solid ${T.border}`}}>
+      <div style={{display:"flex", flexWrap:"wrap", gap:14, padding:"0 12px 10px", borderBottom:`1px solid ${T.border}`}}>
         {TABS_GROUPED.map((group, gi) => (
-          <div key={gi} style={{display:"flex", gap:6, flexShrink:0}}>
+          <div key={gi} style={{display:"flex", flexWrap:"wrap", gap:6, flexShrink:0}}>
             {group.map(id => {
               const t = TABS.find(x => x.id === id);
               return (
