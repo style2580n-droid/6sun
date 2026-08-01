@@ -4387,7 +4387,25 @@ function TransfersPanel({ team }) {
 // 만들어봤자 "데이터 없음"만 반복해서 보여주는 셈이라 사용자 입장에서 의미 없음.
 function LeaderboardTab({ leagueKey }) {
   const lg = LEAGUES[leagueKey];
-  const [metric, setMetric] = useState("scorers"); // scorers | assists
+  const [metric, setMetric] = useState("scorers");
+
+  // 2026-08-01 확장: 득점왕/도움왕 2개뿐이던 걸 11개 카테고리로 확장.
+  // EPL 앱과 달리 8개리그는 SQUADS 기반 경기당 평균(src:"stat") 소스가
+  // 없어서, collect_bsd_player_stats.py가 채운 시즌 누적값(LEADERBOARD의
+  // 단순 {key:숫자} 구조)만으로 전부 구성 — scorers/assists와 완전히
+  // 동일한 형태라 기존 rows 계산 로직을 그대로 재사용 가능.
+  const METRICS = [
+    {id:"scorers", label:"⚽ 득점왕"}, {id:"assists", label:"🎯 도움왕"},
+    {id:"headerGoals", label:"🎯 헤더골"}, {id:"penaltyGoals", label:"🥅 페널티골"},
+    {id:"freeKickGoals", label:"🎯 프리킥골"},
+    {id:"shots", label:"👟 슈팅"}, {id:"sot", label:"🎯 유효슈팅"},
+    {id:"keyPasses", label:"🔑 키패스"}, {id:"dribbles", label:"⚡ 드리블"},
+    {id:"tacklesWon", label:"🛡 태클"}, {id:"interceptions", label:"✋ 인터셉트"},
+    {id:"clearances", label:"🧹 클리어링"}, {id:"saves", label:"🧤 선방"},
+    {id:"yellowCards", label:"🟨 경고"}, {id:"redCards", label:"🟥 퇴장"},
+    {id:"appearances", label:"📅 출전경기"}, {id:"minutesPlayed", label:"⏱ 출전시간"},
+  ];
+  const curLabel = METRICS.find(m => m.id === metric)?.label || metric;
 
   const rows = useMemo(() => {
     const src = LEADERBOARD[metric] || {};
@@ -4411,7 +4429,7 @@ function LeaderboardTab({ leagueKey }) {
         <div style={{textAlign:"center", padding:"24px 8px"}}>
           <div style={{fontSize:28, marginBottom:8}}>⚽</div>
           <div style={{fontSize:13.5, color:T.text, fontWeight:700, marginBottom:6}}>
-            {lg.label} 득점왕/도움왕 데이터가 아직 없습니다
+            {lg.label} 시즌 기록 데이터가 아직 없습니다
           </div>
           <div style={{fontSize:12, color:T.muted, lineHeight:1.6}}>
             2026-27 시즌이 아직 개막 전이라(8월 예정) 종료된 경기가 없습니다.
@@ -4426,14 +4444,14 @@ function LeaderboardTab({ leagueKey }) {
   return (
     <div>
       <Card>
-        <div style={{display:"flex", gap:8}}>
-          {[{id:"scorers", label:"⚽ 득점왕"}, {id:"assists", label:"🎯 도움왕"}].map(m => (
+        <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:2}}>
+          {METRICS.map(m => (
             <button key={m.id} onClick={() => setMetric(m.id)}
               style={{
-                flex:1, padding:"9px 0", borderRadius:8, border:`1px solid ${T.border}`,
+                flexShrink:0, padding:"8px 12px", borderRadius:8, border:`1px solid ${T.border}`,
                 background: metric === m.id ? T.accent : T.surface,
                 color: metric === m.id ? "#fff" : T.text,
-                fontSize:13, fontWeight:700, cursor:"pointer",
+                fontSize:12.5, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap",
               }}>
               {m.label}
             </button>
@@ -4451,10 +4469,19 @@ function LeaderboardTab({ leagueKey }) {
           </div>
         </Card>
       )}
+      {(metric === "headerGoals" || metric === "penaltyGoals" || metric === "freeKickGoals") && (
+        <Card style={{marginTop:10}}>
+          <div style={{fontSize:11, color:T.muted, lineHeight:1.6}}>
+            ⚠️ 골 상세정보(헤더/페널티/프리킥 여부)는 이번에 새로 추가된 필드라
+            실측 검증이 진행 중입니다 — 특히 헤더골은 정확한 표기값을 다음
+            파이프라인 실행 로그로 확정하는 중이라 0건이 정상일 수 있어요.
+          </div>
+        </Card>
+      )}
       <Card>
         {rows.length === 0 ? (
           <div style={{fontSize:12.5, color:T.muted, textAlign:"center", padding:"12px 0"}}>
-            {metric === "scorers" ? "득점" : "도움"} 기록이 아직 없습니다.
+            {curLabel} 기록이 아직 없습니다.
           </div>
         ) : (
           <div style={{display:"flex", flexDirection:"column", gap:2}}>
