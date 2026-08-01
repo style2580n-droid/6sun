@@ -839,6 +839,12 @@ function starPlayerLambdaBoost(lambdaHome, lambdaAway, home, away) {
 // 8월 개막 전에는 비어있는 게 정상이다.
 let LEADERBOARD = { scorers: {}, assists: {} };
 
+// 2026-08-01 신규: 카드 결장위험 — {선수명: {team, yellow_total,
+// red_on_last_match, last_match_date}}. compute_card_suspensions.py가
+// 옐로누적 5장+/레드카드 직전경기 선수만 담아서 준다(그 외는 알릴 게
+// 없어서 제외됨 — 용량 절약).
+let CARD_SUSPENSIONS = {};
+
 async function loadPipelineData(leagueKey) {
   try {
     await fetchPipelineDataMultileague();
@@ -857,6 +863,11 @@ async function loadPipelineData(leagueKey) {
     if (data.elo && typeof data.elo === "object") {
       Object.assign(ELO, data.elo);
     }
+    // 2026-08-01 추가: 리그 전환 시 이전 리그 데이터가 안 남게 매번 통째로
+    // 교체(다른 전역 변수들처럼 Object.assign으로 누적하면 리그 바뀌어도
+    // 이전 리그 선수가 안 지워짐 — 카드 정지는 팀 매칭이라 이게 특히 중요).
+    CARD_SUSPENSIONS = (data.cardSuspensions && typeof data.cardSuspensions === "object")
+      ? data.cardSuspensions : {};
     if (data.squads && typeof data.squads === "object" && Object.keys(data.squads).length) {
       SQUADS = data.squads;
       squadsLoaded = true;
@@ -2474,6 +2485,14 @@ function LineupInjuryPanel({leagueKey, home, away}) {
   const hasInjuries = injuries && (injuries.home?.length || injuries.away?.length);
   const injurySourceLabel = injuries?.source || "API-FOOTBALL/ESPN";
 
+  // 2026-08-01 추가: 카드 결장위험(옐로누적/레드카드 직전경기). 부상자와
+  // 별개로 CARD_SUSPENSIONS는 라인업 버튼과 무관하게 항상 즉시 표시 가능
+  // (파이프라인이 이미 계산해둔 정적 데이터라 API 호출 불필요).
+  const cardEntries = Object.entries(CARD_SUSPENSIONS || {});
+  const homeCards = cardEntries.filter(([, info]) => info.team === home);
+  const awayCards = cardEntries.filter(([, info]) => info.team === away);
+  const hasCardRisk = homeCards.length > 0 || awayCards.length > 0;
+
   return (
     <Card>
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
@@ -2488,7 +2507,26 @@ function LineupInjuryPanel({leagueKey, home, away}) {
         </button>
       </div>
 
-      {tried && !loading && !hasLineup && !hasInjuries && (
+      {hasCardRisk && (
+        <div style={{marginTop:8, display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
+          {[["home", home, homeCards], ["away", away, awayCards]].map(([side, teamName, cards]) => (
+            cards.length > 0 && (
+              <div key={side}>
+                {cards.map(([name, info], i) => (
+                  <div key={i} style={{fontSize:11.5, color: info.red_on_last_match ? T.red : T.gold}}>
+                    🟨 {name}
+                    <div style={{fontSize:10, color:T.muted}}>
+                      {info.red_on_last_match ? "직전경기 퇴장(결장확정)" : `옐로 ${info.yellow_total}장(정지위험)`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ))}
+        </div>
+      )}
+
+      {tried && !loading && !hasLineup && !hasInjuries && !hasCardRisk && (
         <div style={{fontSize:11.5, color:T.gold, marginTop:8}}>
           아직 확정 라인업/결장 정보가 없습니다 (킥오프 임박 전이거나 매칭 실패).
         </div>
